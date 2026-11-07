@@ -2115,7 +2115,7 @@ const GROUPS = [
 ];
 const TOOLS = [['trend_line', '╱', '趨勢線（2 點）'], ['horizontal_line', '─', '水平線（1 點）'], ['parallel_channel', '▱', '通道（A、B、C）'], ['marker', '◆', '標記（1 點）'], ['zone', '▭', '區間（2 個對角）']];
 const CSS = `
-.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc)}
+.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:600px}
 .kc *{box-sizing:border-box}
 .kc-row{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-bottom:6px}
 .kc-title{color:var(--muted-foreground,#787b86);margin-right:2px}
@@ -2132,7 +2132,7 @@ const CSS = `
 .kc .tc-cursor-pointer,.kc .tc-cursor-pointer *{cursor:pointer!important}
 .kc .tc-cursor-grab,.kc .tc-cursor-grab *{cursor:grab!important}
 .kc .tc-cursor-grabbing,.kc .tc-cursor-grabbing *{cursor:grabbing!important}
-@media (max-width:480px){.kc-chart{height:440px}}`;
+@media (max-width:480px){.kc{min-height:560px}.kc-chart{height:400px}}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
 window.__kcardKline ||= new Promise((ok, fail) => {
@@ -2176,7 +2176,7 @@ const j = await r.json().catch(() => ({}));
 if (!r.ok) throw Object.assign(new Error(`${url} 回 ${r.status}：${j.error || r.statusText}`), { status: r.status, body: j });
 return j;
 };
-root.appendChild(el('div', 'kc-msg', `載入 ${src}/api/card/${cfg.id} …`));
+root.appendChild(el('div', 'kc-msg', `載入中 ${src}/api/card/${cfg.id} …`));
 let data, k;
 try { [data, k] = await Promise.all([api(`/api/card/${encodeURIComponent(cfg.id)}`), loadKline()]); } catch (e) { return fail(`kcard 載入失敗\n${e.message}`); }
 applyTheme();
