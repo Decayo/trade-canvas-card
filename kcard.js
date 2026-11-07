@@ -2164,7 +2164,9 @@ while (prev && !(prev.tagName === 'SCRIPT' && prev.type === 'text/kcard')) prev 
 try { cfg = JSON.parse((prev || document.querySelector('script[type="text/kcard"]'))?.textContent || 'null'); } catch { cfg = null; }
 if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS; document.head.appendChild(st); }
 const root = el('div', 'kc');
-(script?.parentNode || document.body).insertBefore(root, script?.nextSibling || null);
+if (script && document.body?.contains(script)) script.parentNode.insertBefore(root, script.nextSibling);
+else if (document.body) document.body.appendChild(root);
+else await new Promise((ok) => document.addEventListener('DOMContentLoaded', () => { document.body.appendChild(root); ok(); }, { once: true }));
 const fail = (msg) => { root.innerHTML = ''; root.appendChild(el('div', 'kc-err', msg)); };
 if (!cfg?.src || !cfg?.id) return fail('kcard：找不到設定，需要 <script type="text/kcard">{"src":"…","id":"…"}</script>');
 const src = String(cfg.src).replace(/\/+$/, '');
