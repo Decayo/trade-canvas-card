@@ -3,14 +3,15 @@
 `kcard.js` 是 trade-canvas 的 T3 卡片外殼。agent 交給 T3 `html_render` 的只有兩個 script tag：
 
 ```html
-<script type="text/kcard">{"src":"<canvas server>","id":"<view id>"}</script>
+<script type="text/kcard">{"src":"<canvas server>","id":"<card id>","hook":"<agent thread webhook，可省略>"}</script>
 <script src="https://cdn.jsdelivr.net/gh/Decayo/trade-canvas-card@<commit>/kcard.js"></script>
 ```
 
-- 外殼讀這段設定，從 `<src>/api/card/<id>` 取 K 棒、畫線、note、signal，自己算 JS 指標，用跟 web app 同一份 chart core 畫圖。
+- 卡片是一張快照：K 棒、指標、當時共用畫線的副本（記下 revision），加上 agent 只給這張卡的「暫時」線。
+- 使用者在卡片上可以選一根 bar 或一段範圍、畫草稿趨勢線和水平線、寫一則備註，按「送出」。
+- 送出時先到 `<src>/api/card/<id>/submit` 存成待對齊的紀錄（不會寫進共用畫線），再把 server 產生的純文字回覆 POST 到設定裡的 `hook`（agent 自己 thread 的 webhook，可省略），之後卡片鎖定。
 - KLineChart 從 jsDelivr 的 npm `klinecharts@10.1.0` 載入。
-- 每 3 秒同步畫線；在卡片上畫、拖、刪的線透過 `<src>/api/drawings` 存回，帶 `expected_revision`，衝突時重新載入。
-- 這個 repo 只放打包好的 `kcard.js`、打包腳本 `build.mjs`、這份說明。沒有主機位址、帳號或券商程式；主機位址在卡片的設定裡，由 canvas server 產生。
+- 這個 repo 只放打包好的 `kcard.js`、打包腳本 `build.mjs`、這份說明。沒有主機位址、帳號或券商程式；主機位址和 hook 在卡片的設定裡，由 agent 產生。
 
 ## 打包
 

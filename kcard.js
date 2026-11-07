@@ -444,7 +444,8 @@ return { VP_TFS, VP_DEFAULTS, pickLowerTf, buildIndex, valueArea, profile };
 __M['public/core/drawings.js'] = (() => {
 const { barIndexAt, PERIODS } = __M['public/core/time.js'];
 const { T } = __M['public/core/theme.js'];
-const DRAW_KINDS = { trend_line: 2, horizontal_line: 1, parallel_channel: 3, marker: 1, zone: 2 };
+const DRAW_KINDS = { trend_line: 2, horizontal_line: 1, parallel_channel: 3, marker: 1, zone: 2, bar_span: 2 };
+const TAG = (d) => (d.temp ? '暫時' : d.card_draft ? '草稿' : null);
 const MARKER_TYPES = ['buy', 'sell', 'plan', 'event'];
 const toMs = (a) => (a?.ts != null ? Number(a.ts) : Date.parse(a?.time));
 function logicalAt(data, tf, ms) {
@@ -478,7 +479,7 @@ if (pts.some((p) => p.x == null || !Number.isFinite(p.y))) continue;
 const col = colorOf(d);
 const sel = c.selectedDrawing === d.id || d.draft;
 const hit = { id: d.id, segs: [], pts: pts.map((p, i) => ({ x: p.x, y: p.y, i })), rect: null };
-ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = sel ? 2 : 1.5; ctx.setLineDash(d.draft ? [4, 3] : []);
+ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = sel ? 2 : 1.5; ctx.setLineDash(d.draft || TAG(d) ? [4, 3] : []);
 const line = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); hit.segs.push([x1, y1, x2, y2]); };
 let labelAt = pts[0], mtText = null;
 if (d.kind === 'trend_line') {
@@ -508,6 +509,12 @@ line(A.x, Y(A.price + k * off), B.x, Y(B.price + k * off));
 }
 ctx.setLineDash([]);
 labelAt = B;
+} else if (d.kind === 'bar_span' && pts.length >= 2) {
+const half = Math.max(2, Math.abs(xAxis.convertToPixel(1) - xAxis.convertToPixel(0)) / 2);
+const x0 = Math.min(pts[0].x, pts[1].x) - half, x1 = Math.max(pts[0].x, pts[1].x) + half;
+ctx.globalAlpha = 0.14; ctx.fillRect(x0, 0, x1 - x0, bounding.height); ctx.globalAlpha = 1;
+hit.rect = { x0, x1, y0: 0, y1: bounding.height };
+labelAt = { x: x0 + 2, y: 14 };
 } else if (d.kind === 'zone' && pts.length >= 2) {
 const x0 = Math.min(pts[0].x, pts[1].x), x1 = Math.max(pts[0].x, pts[1].x), y0 = Math.min(pts[0].y, pts[1].y), y1 = Math.max(pts[0].y, pts[1].y);
 ctx.globalAlpha = 0.12; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.globalAlpha = 1;
@@ -529,7 +536,8 @@ hit.rect = { x0: x - r - 2, x1: x + r + 2, y0: y - r - 2, y1: y + r + 2 };
 labelAt = { x: x + r + 3, y };
 mtText = mt;
 }
-const text = d.label ? (d.kind === 'marker' ? `${d.label} · ${mtText}` : d.label) : d.kind === 'marker' ? mtText : '';
+const base = d.label ? (d.kind === 'marker' ? `${d.label} · ${mtText}` : d.label) : d.kind === 'marker' ? mtText : '';
+const text = TAG(d) ? `${TAG(d)}${base ? ` · ${base}` : ''}` : base;
 if (text && labelAt) {
 ctx.font = '11px sans-serif'; ctx.textBaseline = labelAt.above ? 'bottom' : 'middle';
 ctx.textAlign = labelAt.right ? 'right' : 'left';
@@ -2103,19 +2111,18 @@ __M['card/shell.js'] = (() => {
 const { registerAll, createCanvasChart } = __M['public/core/chart.js'];
 const { T } = __M['public/core/theme.js'];
 const { leaves, shown } = __M['public/core/layers.js'];
+const { barNumbers } = __M['public/core/time.js'];
 const { unpackRows } = __M['public/core/wire.js'];
-const { DRAW_KINDS, MARKER_TYPES } = __M['public/core/drawings.js'];
 const { COMPUTE } = __M['card/indicators.js'];
 const KLINE = 'https://cdn.jsdelivr.net/npm/klinecharts@10.1.0/dist/umd/klinecharts.min.js';
-const POLL_MS = 3000;
 const GROUPS = [
 { id: 'indicators', label: '指標', re: /^indicators\// }, { id: 'human', label: 'human', re: /^human\// },
 { id: 'agent', label: 'agent', re: /^agent\// }, { id: 'signals', label: 'signals', re: /\/signal\// },
 { id: 'notes', label: 'notes', re: /\/note\// }, { id: 'drawings', label: '畫線', re: /\/drawing\// },
 ];
-const TOOLS = [['trend_line', '╱', '趨勢線（2 點）'], ['horizontal_line', '─', '水平線（1 點）'], ['parallel_channel', '▱', '通道（A、B、C）'], ['marker', '◆', '標記（1 點）'], ['zone', '▭', '區間（2 個對角）']];
+const TOOLS = [['select', '▤ 選 bar', '點一根 bar，或按住拖一段範圍'], ['trend_line', '╱ 趨勢線', '草稿：點 2 下'], ['horizontal_line', '─ 水平線', '草稿：點 1 下']];
 const CSS = `
-.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:600px}
+.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:640px}
 .kc *{box-sizing:border-box}
 .kc-row{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-bottom:6px}
 .kc-title{color:var(--muted-foreground,#787b86);margin-right:2px}
@@ -2124,7 +2131,9 @@ const CSS = `
 .kc-btn.off{opacity:.45;text-decoration:line-through}
 .kc-sep{width:1px;height:16px;background:var(--border,#2a2e39)}
 .kc-chart{position:relative;width:100%;height:460px;border:1px solid var(--border,#2a2e39);border-radius:6px;overflow:hidden}
-.kc-edit input,.kc-edit select{font:inherit;color:inherit;background:transparent;border:1px solid var(--border,#2a2e39);border-radius:4px;padding:1px 6px}
+.kc-note{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--border,#2a2e39);border-radius:4px;padding:4px 6px;resize:vertical;min-height:30px}
+.kc-btn:disabled{opacity:.45;cursor:default}
+.kc-send{font-weight:600}
 .kc-msg{color:var(--muted-foreground,#787b86);font-size:11px;min-height:15px}
 .kc-msg.err{color:var(--destructive,#ef5350)}
 .kc-foot{margin-top:6px;color:var(--muted-foreground,#787b86);font-size:11px;display:flex;flex-wrap:wrap;gap:4px 12px}
@@ -2132,7 +2141,7 @@ const CSS = `
 .kc .tc-cursor-pointer,.kc .tc-cursor-pointer *{cursor:pointer!important}
 .kc .tc-cursor-grab,.kc .tc-cursor-grab *{cursor:grab!important}
 .kc .tc-cursor-grabbing,.kc .tc-cursor-grabbing *{cursor:grabbing!important}
-@media (max-width:480px){.kc{min-height:560px}.kc-chart{height:400px}}`;
+@media (max-width:480px){.kc{min-height:620px}.kc-chart{height:380px}}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
 window.__kcardKline ||= new Promise((ok, fail) => {
@@ -2183,22 +2192,40 @@ let data, k;
 try { [data, k] = await Promise.all([api(`/api/card/${encodeURIComponent(cfg.id)}`), loadKline()]); } catch (e) { return fail(`kcard 載入失敗\n${e.message}`); }
 applyTheme();
 root.innerHTML = '';
-const head = el('div', 'kc-row'), tools = el('div', 'kc-row'), chartEl = el('div', 'kc-chart'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
-root.append(head, tools, chartEl, msg, foot);
+const head = el('div', 'kc-row'), tools = el('div', 'kc-row'), chartEl = el('div', 'kc-chart');
+const noteEl = el('textarea', 'kc-note'); noteEl.rows = 1; noteEl.placeholder = '備註（一則，送出時一起帶給 agent）';
+const bottom = el('div', 'kc-row'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
+root.append(head, tools, chartEl, noteEl, bottom, msg, foot);
 const say = (t, err) => { msg.textContent = t || ''; msg.classList.toggle('err', !!err); };
-foot.append(el('span', null, `資料：${data.source}`), el('span', null, `讀取於 ${data.read_at}`), el('span', null, `view ${data.id}`));
-const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: data.drawings, intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
-let rev = data.drawingRevision;
+foot.append(el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
+const shared = data.drawings.map((d) => ({ ...d, anchors: d.anchors.map((a) => ({ ...a })) }));
+const temp = data.temp_drawings || [];
+const drafts = [];
+let selection = null; // { tf, i0, i1 } over the current pane's bars
+const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
 registerAll(k, data.metas);
 const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
 const offGroups = {};
-let cur = 0, selected = null;
+let cur = 0, mode = null, locked = false, sent = null;
 const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]);
-return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => shown(p, data.off) && !off.some((g) => g.re.test(p))));
+return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/') || (shown(p, data.off) && !off.some((g) => g.re.test(p)))));
 };
-const mark = () => { root.dataset.rev = rev; root.dataset.drawings = state.drawings.map((d) => d.id).join(','); };
-const refresh = () => { view.apply(state, visible(), {}); mark(); };
+const selBand = () => {
+if (!selection) return [];
+const bars = panes.find((p) => p.tf === selection.tf)?.bars || [];
+const a = bars[selection.i0], b = bars[selection.i1];
+if (!a || !b) return [];
+const n = numsOf(selection.tf);
+return [{ id: 'sel', kind: 'bar_span', path: 'card/sel/1', created_by: { kind: 'human' }, color: 'rgba(255,209,102,0.9)',
+label: selection.i0 === selection.i1 ? `#${n[selection.i0]?.n ?? '?'}` : `#${n[selection.i0]?.n ?? '?'}–#${n[selection.i1]?.n ?? '?'}`,
+anchors: [{ ts: a.timestamp, price: 0 }, { ts: b.timestamp, price: 0 }] }];
+};
+const refresh = () => {
+state.drawings = [...shared, ...temp, ...drafts, ...selBand()];
+view.apply(state, visible(), {});
+root.dataset.drafts = drafts.length; root.dataset.selection = selection ? `${selection.tf}:${selection.i0}-${selection.i1}` : '';
+};
 const panes = data.panes.map((p) => {
 const all = p.bars.map((b) => ({ timestamp: b[0], open: b[1], high: b[2], low: b[3], close: b[4], volume: b[5] }));
 const bars = all.slice(p.warm);
@@ -2209,6 +2236,8 @@ else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length
 }
 return { tf: p.tf, bars, rows };
 });
+const numCache = {};
+const numsOf = (tf) => (numCache[tf] ||= barNumbers(panes.find((p) => p.tf === tf)?.bars || [], tf));
 const show = (i) => {
 cur = i;
 const p = panes[i];
@@ -2230,56 +2259,95 @@ b.onclick = () => { offGroups[g.id] = !offGroups[g.id]; refresh(); renderHead();
 head.appendChild(b);
 }
 }
+function setMode(m) {
+mode = locked ? null : m;
+view.startDraw(mode === 'trend_line' || mode === 'horizontal_line' ? mode : null);
+renderTools();
+say(mode === 'select' ? '點一根 bar，或按住左鍵左右拖一段範圍' : mode ? `草稿 ${mode === 'trend_line' ? '趨勢線：點 2 下' : '水平線：點 1 下'}，Esc 取消` : '');
+}
 function renderTools() {
 tools.innerHTML = '';
-for (const [kind, icon, title] of TOOLS) {
-const b = el('button', `kc-btn${view.drawMode === kind ? ' on' : ''}`, icon); b.title = title;
-b.onclick = () => { view.startDraw(view.drawMode === kind ? null : kind); renderTools(); say(view.drawMode ? `在圖上點 ${DRAW_KINDS[kind]} 下，Esc 取消` : ''); };
-tools.appendChild(b);
+for (const [m, label, title] of TOOLS) {
+const b = el('button', `kc-btn${mode === m ? ' on' : ''}`, label); b.title = title; b.disabled = locked;
+b.onclick = () => setMode(mode === m ? null : m); tools.appendChild(b);
 }
-const d = selected && state.drawings.find((x) => x.id === selected);
-if (!d) return;
 tools.appendChild(el('span', 'kc-sep'));
-const box = el('span', 'kc-row kc-edit'); box.style.margin = '0';
-const who = d.created_by?.kind === 'agent' ? `agent ${d.created_by.name}` : '人';
-box.appendChild(el('span', 'kc-title', `${d.kind}（${who}）`));
-const label = el('input'); label.value = d.label || ''; label.placeholder = '標題'; label.size = 12; box.appendChild(label);
-let mt = null;
-if (d.kind === 'marker') { mt = el('select'); for (const t of MARKER_TYPES) { const o = el('option', null, t); o.value = t; if ((d.marker_type || 'event') === t) o.selected = true; mt.appendChild(o); } box.appendChild(mt); }
-const ok = el('button', 'kc-btn', '存'); ok.onclick = () => save([{ ...strip(d), label: label.value, ...(mt ? { marker_type: mt.value } : {}) }]);
-const del = el('button', 'kc-btn', '刪除'); del.onclick = () => remove(d.id);
-box.append(ok, del); tools.appendChild(box);
+const undo = el('button', 'kc-btn', '刪掉上一條'); undo.disabled = locked || !drafts.length; undo.onclick = () => { drafts.pop(); refresh(); renderTools(); };
+const clr = el('button', 'kc-btn', '清除選取'); clr.disabled = locked || !selection; clr.onclick = () => { selection = null; refresh(); renderTools(); };
+tools.append(undo, clr);
+bottom.innerHTML = '';
+const summary = el('span', 'kc-title', `選取 ${selection ? 1 : 0} · 草稿 ${drafts.length} 條${temp.length ? ` · agent 暫時線 ${temp.length}` : ''}`);
+const send = el('button', 'kc-btn on kc-send', sent ? `已送出 ${sent.sub_id}` : '送出'); send.disabled = locked;
+send.onclick = submit;
+bottom.append(summary, send);
+if (sent?.hookFailed) { const again = el('button', 'kc-btn', '重送到 thread'); again.onclick = () => postHook(sent); bottom.appendChild(again); }
 }
-const strip = (d) => { const { path: _p, created_at: _c, updated_at: _u, ...rest } = d; return rest; };
-async function sync(force) {
-try {
-const r = await api(`/api/card/${encodeURIComponent(cfg.id)}/sync?rev=${force ? -1 : rev}`);
-if (r.drawings) { state.drawings = r.drawings; rev = r.revision; if (selected && !state.drawings.some((d) => d.id === selected)) selected = null; refresh(); renderTools(); }
-if (msg.classList.contains('err') && /連不到/.test(msg.textContent)) say('');
-} catch (e) { say(e.message, true); }
-}
-async function save(list) {
-try {
-await api('/api/drawings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected_revision: rev, drawings: list }) });
-say('已存');
-} catch (e) { say(e.status === 409 ? '畫線已經被別人（agent 或另一個畫面）改過，已重新載入。這次的修改沒有存，請再做一次。' : e.message, true); }
-await sync(true);
-}
-async function remove(id) {
-try { await api(`/api/drawings?id=${encodeURIComponent(id)}&expected_revision=${rev}`, { method: 'DELETE' }); selected = null; say('已刪除'); }
-catch (e) { say(e.status === 409 ? '畫線已經被別人改過，已重新載入，請再刪一次。' : e.message, true); }
-await sync(true);
-}
-view.onDrawingDone = (d) => { renderTools(); save([d]); };
-view.onDrawingChange = (id, anchors) => { const d = state.drawings.find((x) => x.id === id); if (d) save([{ ...strip(d), anchors }]); };
-view.onDrawingSelect = (id) => { selected = id; renderTools(); };
-view.onDrawingEdit = (id) => { selected = id; view.selectDrawing(id); renderTools(); tools.querySelector('input')?.focus(); };
+view.onDrawingDone = (d) => {
+drafts.push({ ...d, id: `draft-${drafts.length + 1}`, tf: panes[cur].tf, card_draft: true, created_by: { kind: 'human' }, path: `card/draft/draft-${drafts.length + 1}` });
+setMode(null); refresh();
+};
+view.onDrawingChange = (id, anchors) => {
+const d = drafts.find((x) => x.id === id);
+if (d && !locked) d.anchors = anchors;
+else { const s0 = data.drawings.find((x) => x.id === id) || (data.temp_drawings || []).find((x) => x.id === id); const t = shared.find((x) => x.id === id) || temp.find((x) => x.id === id); if (s0 && t) t.anchors = s0.anchors.map((a) => ({ ...a })); }
+refresh();
+};
+const paneRect = () => view.chart.getDom('candle_pane', 'main').getBoundingClientRect();
+const barIndex = (e) => {
+const r = paneRect();
+const pt = view.chart.convertFromPixel([{ x: e.clientX - r.left, y: e.clientY - r.top }], { paneId: 'candle_pane' })[0];
+const n = panes[cur].bars.length;
+return pt?.dataIndex == null ? null : Math.max(0, Math.min(n - 1, Math.round(pt.dataIndex)));
+};
+root.addEventListener('mousedown', (e) => {
+if (mode !== 'select' || locked || e.button !== 0 || !chartEl.contains(e.target)) return;
+const i0 = barIndex(e);
+if (i0 == null) return;
+e.stopImmediatePropagation(); e.preventDefault();
+selection = { tf: panes[cur].tf, i0, i1: i0 }; refresh();
+const mv = (ev) => { const i = barIndex(ev); if (i == null) return; selection = { ...selection, i0: Math.min(i0, i), i1: Math.max(i0, i) }; refresh(); };
+const up = () => { document.removeEventListener('mousemove', mv, true); document.removeEventListener('mouseup', up, true); renderTools(); };
+document.addEventListener('mousemove', mv, true); document.addEventListener('mouseup', up, true);
+}, true);
 root.tabIndex = -1;
-root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && view.drawMode) { view.startDraw(null); renderTools(); say(''); } });
+root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && mode) setMode(null); });
+const selectionsOut = () => {
+if (!selection) return [];
+const n = numsOf(selection.tf), out = [];
+for (let i = selection.i0; i <= selection.i1; i++) {
+const x = n[i];
+if (!x) continue;
+const last = out.at(-1);
+if (last && last.date === x.date) last.to_bar = x.n; else out.push({ tf: selection.tf, date: x.date, from_bar: x.n, to_bar: x.n });
+}
+return out;
+};
+async function postHook(rec) {
+try {
+await fetch(cfg.hook, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ answer: rec.answer, sentAt: new Date().toISOString() }) });
+rec.hookFailed = false; locked = true; setMode(null);
+say(`已送出 ${rec.sub_id}，agent 會在 thread 收到。卡片已鎖定。`);
+} catch (e) { rec.hookFailed = true; say(`紀錄 ${rec.sub_id} 已存，但送到 thread 失敗：${e.message}。草稿保留，可以重送。`, true); }
+renderTools();
+}
+async function submit() {
+if (locked) return;
+const body = { base_revision: data.base_revision, selections: selectionsOut(), note: noteEl.value.trim(),
+drawings: drafts.map((d) => ({ kind: d.kind, tf: d.tf, anchors: d.anchors.map((a) => ({ ts: a.ts ?? Date.parse(a.time), price: a.price })) })) };
+if (!body.selections.length && !body.drawings.length && !body.note) return say('還沒有東西可以送：選 bar、畫草稿，或寫備註。', true);
+say('送出中…');
+try {
+const r = await api(`/api/card/${encodeURIComponent(cfg.id)}/submit`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(body) });
+sent = { sub_id: r.sub_id, answer: r.answer };
+root.dataset.sub = r.sub_id;
+if (cfg.hook) await postHook(sent);
+else { locked = true; setMode(null); say(`已存紀錄 ${r.sub_id}（這張卡沒有 hook：agent 要從 /api/ai/submissions 讀）。卡片已鎖定。`); renderTools(); }
+noteEl.disabled = locked;
+} catch (e) { say(`送出失敗：${e.message}。草稿保留。`, true); }
+}
 renderTools();
 show(0);
 if (window.ResizeObserver) new ResizeObserver(() => view.chart.resize()).observe(chartEl);
-setInterval(() => { if (!document.hidden) sync(false); }, POLL_MS);
 }
 boot(window.__kcardScript);
 return {  };
