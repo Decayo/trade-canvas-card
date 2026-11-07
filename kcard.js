@@ -2195,7 +2195,8 @@ const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]);
 return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => shown(p, data.off) && !off.some((g) => g.re.test(p))));
 };
-const refresh = () => view.apply(state, visible(), {});
+const mark = () => { root.dataset.rev = rev; root.dataset.drawings = state.drawings.map((d) => d.id).join(','); };
+const refresh = () => { view.apply(state, visible(), {}); mark(); };
 const panes = data.panes.map((p) => {
 const all = p.bars.map((b) => ({ timestamp: b[0], open: b[1], high: b[2], low: b[3], close: b[4], volume: b[5] }));
 const bars = all.slice(p.warm);
