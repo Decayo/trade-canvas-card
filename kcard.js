@@ -2051,11 +2051,12 @@ const t = i / Math.max(g.periods.length - 1, 1);
 const a = g.alpha[0] + t * (g.alpha[1] - g.alpha[0]);
 return `rgba(${g.rgb.join(',')},${a.toFixed(3)})`;
 }
+const PLOT_GROUPS = ['long', 'far', 'ultra'];
 const META = {
 name: 'GMMA', label: `GMMA (${GROUPS.map((g) => `${g.periods[0]}-${g.periods.at(-1)}`).join(' / ')})`,
 paramsText: GROUPS.map((g) => g.periods.join(',')).join(' | '), pane: 'main', order: 50, defaultOn: true, zLevel: -1,
 plot: { lines: [
-...GROUPS.flatMap((g) => g.periods.map((p, i) => ({ key: `ema${p}`, title: `${p}`, color: colour(g, i), width: 1, smooth: true }))),
+...GROUPS.filter((g) => PLOT_GROUPS.includes(g.id)).flatMap((g) => g.periods.map((p, i) => ({ key: `ema${p}`, title: `${p}`, color: colour(g, i), width: 1, smooth: true }))),
 { key: `ema${ANCHOR.period}`, title: `EMA${ANCHOR.period}`, color: ANCHOR.color, width: ANCHOR.width, dash: ANCHOR.dash, smooth: true },
 ] },
 warmup: Math.max(...GROUPS.flatMap((g) => g.periods)) * 3,
@@ -2094,7 +2095,7 @@ if (p && groups[g.id]) groups[g.id].spread_change = groups[g.id].spread - p.spre
 }
 return { groups, relation, squeeze_pct_threshold: SQUEEZE_PCT };
 }
-return { GROUPS, ANCHOR, SQUEEZE_PCT, META, compute, describe };
+return { GROUPS, ANCHOR, SQUEEZE_PCT, PLOT_GROUPS, META, compute, describe };
 })();
 __M['card/indicators.js'] = (() => {
 const { META: GAP_M, compute: gap } = __M['indicators/gap.js'];
@@ -2125,7 +2126,7 @@ const GROUPS = [
 ];
 const TOOLS = [['select', '▤ 選 bar', '點一根 bar，或按住拖一段範圍'], ['trend_line', '╱ 趨勢線', '草稿：點 2 下'], ['horizontal_line', '─ 水平線', '草稿：點 1 下']];
 const CSS = `
-.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:680px}
+.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:700px}
 .kc *{box-sizing:border-box}
 .kc-row{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-bottom:6px}
 .kc-title{color:var(--muted-foreground,#787b86);margin-right:2px}
@@ -2152,7 +2153,11 @@ const CSS = `
 .kc .tc-cursor-pointer,.kc .tc-cursor-pointer *{cursor:pointer!important}
 .kc .tc-cursor-grab,.kc .tc-cursor-grab *{cursor:grab!important}
 .kc .tc-cursor-grabbing,.kc .tc-cursor-grabbing *{cursor:grabbing!important}
-@media (max-width:480px){.kc{min-height:700px}.kc-chart{height:380px}}`;
+.kc-tabs{display:flex;gap:4px;overflow-x:auto;white-space:nowrap;margin-bottom:4px;scrollbar-width:thin}
+.kc-tab{max-width:150px;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
+.kc-tab.miss::after{content:' ⚠'}
+.kc-miss{color:var(--warning,#f2c94c);font-size:11px;margin-bottom:4px}
+@media (max-width:480px){.kc{min-height:720px}.kc-chart{height:380px}.kc-tab{max-width:120px}}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
 window.__kcardKline ||= new Promise((ok, fail) => {
@@ -2203,83 +2208,17 @@ let data, k;
 try { [data, k] = await Promise.all([api(`/api/card/${encodeURIComponent(cfg.id)}`), loadKline()]); } catch (e) { return fail(`kcard 載入失敗\n${e.message}`); }
 applyTheme();
 root.innerHTML = '';
-const head = el('div', 'kc-row'), tools = el('div', 'kc-row'), chartEl = el('div', 'kc-chart');
+const tabsRow = el('div', 'kc-tabs'), head = el('div', 'kc-row'), tools = el('div', 'kc-row'), missEl = el('div', 'kc-miss'), chartEl = el('div', 'kc-chart');
 const linesBox = el('details', 'kc-lines'), linesSum = el('summary'), linesList = el('div', 'kc-list');
 linesBox.append(linesSum, linesList);
 const noteEl = el('textarea', 'kc-note'); noteEl.rows = 1; noteEl.placeholder = '備註（一則，送出時一起帶給 agent）';
 const bottom = el('div', 'kc-row'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
-root.append(head, tools, linesBox, chartEl, noteEl, bottom, msg, foot);
+root.append(tabsRow, head, tools, linesBox, missEl, chartEl, noteEl, bottom, msg, foot);
 const say = (t, err) => { msg.textContent = t || ''; msg.classList.toggle('err', !!err); };
-foot.append(el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
+foot.append(el('span', null, data.title), el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
 const shared = data.drawings.map((d) => ({ ...d, anchors: d.anchors.map((a) => ({ ...a })) }));
-const temp = data.temp_drawings || [];
-const drafts = [];
-let selection = null; // { tf, i0, i1 } over the current pane's bars
-const hidden = new Set(), pendingDel = new Set();
-let selLine = null;
-if (data.focus === 'temp') for (const d of shared) hidden.add(d.id);
-else if (Array.isArray(data.focus)) for (const d of shared) if (!data.focus.includes(d.id)) hidden.add(d.id);
-const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
-registerAll(k, data.metas);
-const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
-const offGroups = {};
-let cur = 0, mode = null, locked = false, sent = null;
-const visible = () => {
-const off = GROUPS.filter((g) => offGroups[g.id]);
-return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/') || (shown(p, data.off) && !off.some((g) => g.re.test(p)))));
-};
-const selBand = () => {
-if (!selection) return [];
-const bars = panes.find((p) => p.tf === selection.tf)?.bars || [];
-const a = bars[selection.i0], b = bars[selection.i1];
-if (!a || !b) return [];
-const n = numsOf(selection.tf);
-return [{ id: 'sel', kind: 'bar_span', path: 'card/sel/1', created_by: { kind: 'human' }, color: 'rgba(255,209,102,0.9)',
-label: selection.i0 === selection.i1 ? `#${n[selection.i0]?.n ?? '?'}` : `#${n[selection.i0]?.n ?? '?'}–#${n[selection.i1]?.n ?? '?'}`,
-anchors: [{ ts: a.timestamp, price: 0 }, { ts: b.timestamp, price: 0 }] }];
-};
-const kindOf = (d) => d.kind === 'trend_line' ? '趨勢線' : d.kind === 'horizontal_line' ? '水平線' : d.kind === 'parallel_channel' ? '通道' : d.kind === 'marker' ? '標記' : d.kind === 'zone' ? '區間' : d.kind;
-const groupOfLine = (id) => (temp.some((d) => d.id === id) ? 'temp' : drafts.some((d) => d.id === id) ? 'draft' : 'shared');
-const refresh = () => {
-const lines = [...shared.map((d) => (pendingDel.has(d.id) ? { ...d, pending_delete: true } : d)), ...temp, ...drafts].filter((d) => !hidden.has(d.id));
-state.drawings = [...lines, ...selBand()];
-view.apply(state, visible(), {});
-if (selLine && hidden.has(selLine)) { selLine = null; view.selectDrawing(null); }
-Object.assign(root.dataset, { drafts: drafts.length, selection: selection ? `${selection.tf}:${selection.i0}-${selection.i1}` : '',
-hidden: hidden.size, deletes: pendingDel.size, line: selLine || '', ready: '1' });
-renderLines();
-};
-function renderLines() {
-const all = [['暫時（agent）', temp], ['草稿', drafts], ['共用', shared]];
-const n = temp.length + drafts.length + shared.length;
-linesSum.textContent = `線 ${n} 條${hidden.size ? `（隱藏 ${hidden.size}）` : ''}${pendingDel.size ? ` · 待刪 ${pendingDel.size}` : ''}`;
-linesList.innerHTML = '';
-for (const [name, list] of all) {
-if (!list.length) continue;
-linesList.appendChild(el('div', 'kc-grp', name));
-for (const d of list) {
-const row = el('div', `kc-li${selLine === d.id ? ' sel' : ''}${pendingDel.has(d.id) ? ' del' : ''}`);
-const eye = el('button', 'kc-eye', hidden.has(d.id) ? '◌' : '●'); eye.title = hidden.has(d.id) ? '顯示' : '隱藏';
-eye.onclick = () => { if (hidden.has(d.id)) hidden.delete(d.id); else hidden.add(d.id); refresh(); };
-const who = d.created_by?.kind === 'agent' ? ` · ${d.created_by.name}` : '';
-const nm = el('span', 'nm', `${kindOf(d)}${d.label ? `「${d.label}」` : ''}${who}`); nm.title = d.id;
-nm.onclick = () => { if (hidden.has(d.id)) return; selLine = d.id; view.selectDrawing(d.id); refresh(); renderTools(); };
-row.append(eye, nm);
-if (pendingDel.has(d.id) && !locked) { const undo = el('button', 'kc-eye', '↺'); undo.title = '復原'; undo.style.width = 'auto'; undo.onclick = () => { pendingDel.delete(d.id); refresh(); renderTools(); }; row.appendChild(undo); }
-linesList.appendChild(row);
-}
-}
-}
-function deleteSelected() {
-if (locked || !selLine) return;
-const g = groupOfLine(selLine);
-if (g === 'temp') return say('agent 的暫時線不能刪，可以在「線」清單裡隱藏。', true);
-if (g === 'draft') { drafts.splice(drafts.findIndex((d) => d.id === selLine), 1); selLine = null; say(''); }
-else if (pendingDel.has(selLine)) { pendingDel.delete(selLine); say('已復原'); }
-else { pendingDel.add(selLine); say('已標成待刪：送出後由 agent 確認才會真的刪。'); }
-refresh(); renderTools();
-}
-const panes = data.panes.map((p) => {
+const panes = data.panes.map((p, idx) => {
+const id = p.id || p.tf || `p${idx + 1}`;
 const all = p.bars.map((b) => ({ timestamp: b[0], open: b[1], high: b[2], low: b[3], close: b[4], volume: b[5] }));
 const bars = all.slice(p.warm);
 const rows = {};
@@ -2287,25 +2226,96 @@ for (const m of data.metas) {
 if (COMPUTE[m.name]) { try { rows[m.name] = COMPUTE[m.name](all).slice(p.warm); } catch { /* skip */ } }
 else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length);
 }
-return { tf: p.tf, bars, rows };
+const hidden = new Set();
+if (p.focus === 'temp') for (const d of shared) hidden.add(d.id);
+else if (Array.isArray(p.focus)) for (const d of shared) if (!p.focus.includes(d.id)) hidden.add(d.id);
+return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, bars, rows, nums: barNumbers(bars, p.tf),
+temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new Set(), selection: null };
 });
-const numCache = {};
-const numsOf = (tf) => (numCache[tf] ||= barNumbers(panes.find((p) => p.tf === tf)?.bars || [], tf));
+const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
+registerAll(k, data.metas);
+const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
+const offGroups = {};
+let cur = 0, mode = null, locked = false, sent = null, selLine = null, draftSeq = 0;
+const P = () => panes[cur];
+const visible = () => {
+const off = GROUPS.filter((g) => offGroups[g.id]);
+return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/') || (shown(p, data.off) && !off.some((g) => g.re.test(p)))));
+};
+const daily = (p) => p.bars.length > 1 && p.bars[1].timestamp - p.bars[0].timestamp >= 864e5 * 0.9;
+const dateOf = (ts) => new Date(ts).toLocaleDateString('sv-SE', { timeZone: 'America/New_York' });
+const selBand = (p) => {
+const s0 = p.selection;
+if (!s0) return [];
+const a = p.bars[s0.i0], b = p.bars[s0.i1];
+if (!a || !b) return [];
+const lab = daily(p) ? (s0.i0 === s0.i1 ? dateOf(a.timestamp).slice(5) : `${dateOf(a.timestamp).slice(5)}～${dateOf(b.timestamp).slice(5)}`)
+: s0.i0 === s0.i1 ? `#${p.nums[s0.i0]?.n ?? '?'}` : `#${p.nums[s0.i0]?.n ?? '?'}–#${p.nums[s0.i1]?.n ?? '?'}`;
+return [{ id: 'sel', kind: 'bar_span', path: `card/${p.id}/sel`, created_by: { kind: 'human' }, color: 'rgba(255,209,102,0.9)', label: lab,
+anchors: [{ ts: a.timestamp, price: 0 }, { ts: b.timestamp, price: 0 }] }];
+};
+const kindOf = (d) => d.kind === 'trend_line' ? '趨勢線' : d.kind === 'horizontal_line' ? '水平線' : d.kind === 'parallel_channel' ? '通道' : d.kind === 'marker' ? '標記' : d.kind === 'zone' ? '區間' : d.kind;
+const groupOfLine = (p, id) => (p.temp.some((d) => d.id === id) ? 'temp' : p.drafts.some((d) => d.id === id) ? 'draft' : 'shared');
+const totals = () => ({ drafts: panes.reduce((n, p) => n + p.drafts.length, 0), deletes: panes.reduce((n, p) => n + p.pendingDel.size, 0), selections: panes.filter((p) => p.selection).length });
+const refresh = () => {
+const p = P();
+const lines = [...shared.map((d) => (p.pendingDel.has(d.id) ? { ...d, pending_delete: true } : d)), ...p.temp, ...p.drafts].filter((d) => !p.hidden.has(d.id));
+state.drawings = [...lines, ...selBand(p)];
+view.apply(state, visible(), {});
+if (selLine && (p.hidden.has(selLine) || ![...shared, ...p.temp, ...p.drafts].some((d) => d.id === selLine))) { selLine = null; view.selectDrawing(null); }
+const t = totals();
+Object.assign(root.dataset, { pane: p.id, drafts: t.drafts, selection: t.selections, hidden: p.hidden.size, deletes: t.deletes, line: selLine || '', ready: '1' });
+missEl.textContent = p.missing ? `這個分頁的資料不完整：要 ${p.missing.asked}，cache 裡只有 ${p.missing.have || '（沒有）'}。沒有觸發下載。` : '';
+renderLines();
+};
+function renderLines() {
+const p = P();
+const n = p.temp.length + p.drafts.length + shared.length;
+linesSum.textContent = `線 ${n} 條${p.hidden.size ? `（隱藏 ${p.hidden.size}）` : ''}${p.pendingDel.size ? ` · 待刪 ${p.pendingDel.size}` : ''}`;
+linesList.innerHTML = '';
+for (const [name, list] of [['暫時（agent）', p.temp], ['草稿', p.drafts], ['共用', shared]]) {
+if (!list.length) continue;
+linesList.appendChild(el('div', 'kc-grp', name));
+for (const d of list) {
+const row = el('div', `kc-li${selLine === d.id ? ' sel' : ''}${p.pendingDel.has(d.id) ? ' del' : ''}`);
+const eye = el('button', 'kc-eye', p.hidden.has(d.id) ? '◌' : '●'); eye.title = p.hidden.has(d.id) ? '顯示' : '隱藏';
+eye.onclick = () => { if (p.hidden.has(d.id)) p.hidden.delete(d.id); else p.hidden.add(d.id); refresh(); };
+const who = d.created_by?.kind === 'agent' ? ` · ${d.created_by.name}` : '';
+const nm = el('span', 'nm', `${kindOf(d)}${d.label ? `「${d.label}」` : ''}${who}`); nm.title = d.id;
+nm.onclick = () => { if (p.hidden.has(d.id)) return; selLine = d.id; view.selectDrawing(d.id); refresh(); renderTools(); };
+row.append(eye, nm);
+if (p.pendingDel.has(d.id) && !locked) { const undo = el('button', 'kc-eye', '↺'); undo.title = '復原'; undo.style.width = 'auto'; undo.onclick = () => { p.pendingDel.delete(d.id); refresh(); renderTools(); }; row.appendChild(undo); }
+linesList.appendChild(row);
+}
+}
+}
+function deleteSelected() {
+const p = P();
+if (locked || !selLine) return;
+const g = groupOfLine(p, selLine);
+if (g === 'temp') return say('agent 的暫時線不能刪，可以在「線」清單裡隱藏。', true);
+if (g === 'draft') { p.drafts.splice(p.drafts.findIndex((d) => d.id === selLine), 1); selLine = null; say(''); }
+else if (p.pendingDel.has(selLine)) { p.pendingDel.delete(selLine); say('已復原'); }
+else { p.pendingDel.add(selLine); say('已標成待刪：送出後由 agent 確認才會真的刪。'); }
+refresh(); renderTools();
+}
 const show = (i) => {
-cur = i;
-const p = panes[i];
+cur = i; selLine = null; setMode(null);
+const p = P();
 view.setBars(data.symbol, p.tf, p.bars);
 view.setRows(p.rows);
 refresh();
 view.chart.setBarSpace(Math.max(3, (chartEl.clientWidth - 80) / Math.max(20, p.bars.length + 2)));
 view.chart.scrollToRealTime();
-renderHead();
+renderHead(); renderTools();
 };
 function renderHead() {
+tabsRow.innerHTML = '';
+panes.forEach((p, i) => {
+const b = el('button', `kc-btn kc-tab${i === cur ? ' on' : ''}${p.missing ? ' miss' : ''}`, p.label); b.title = `${p.label}（${p.tf}）${p.missing ? '：資料不完整' : ''}`;
+b.onclick = () => show(i); tabsRow.appendChild(b);
+});
 head.innerHTML = '';
-head.appendChild(el('span', 'kc-title', data.title));
-panes.forEach((p, i) => { const b = el('button', `kc-btn${i === cur ? ' on' : ''}`, p.tf); b.onclick = () => show(i); head.appendChild(b); });
-head.appendChild(el('span', 'kc-sep'));
 for (const g of GROUPS) {
 const b = el('button', `kc-btn${offGroups[g.id] ? ' off' : ''}`, g.label); b.title = `顯示／隱藏 ${g.label}`;
 b.onclick = () => { offGroups[g.id] = !offGroups[g.id]; refresh(); renderHead(); };
@@ -2319,41 +2329,50 @@ renderTools();
 say(mode === 'select' ? '點一根 bar，或按住左鍵左右拖一段範圍' : mode ? `草稿 ${mode === 'trend_line' ? '趨勢線：點 2 下' : '水平線：點 1 下'}，Esc 取消` : '');
 }
 function renderTools() {
+const p = P();
 tools.innerHTML = '';
 for (const [m, label, title] of TOOLS) {
 const b = el('button', `kc-btn${mode === m ? ' on' : ''}`, label); b.title = title; b.disabled = locked;
 b.onclick = () => setMode(mode === m ? null : m); tools.appendChild(b);
 }
 tools.appendChild(el('span', 'kc-sep'));
-const undo = el('button', 'kc-btn', '刪掉上一條'); undo.disabled = locked || !drafts.length; undo.onclick = () => { drafts.pop(); refresh(); renderTools(); };
-const g = selLine && groupOfLine(selLine);
-const del = el('button', 'kc-btn', g === 'shared' && pendingDel.has(selLine) ? '復原這條' : '刪掉這條');
+const undo = el('button', 'kc-btn', '刪掉上一條'); undo.disabled = locked || !p.drafts.length; undo.onclick = () => { p.drafts.pop(); refresh(); renderTools(); };
+const g = selLine && groupOfLine(p, selLine);
+const del = el('button', 'kc-btn', g === 'shared' && p.pendingDel.has(selLine) ? '復原這條' : '刪掉這條');
 del.disabled = locked || !selLine || g === 'temp'; del.title = g === 'temp' ? 'agent 的暫時線只能隱藏' : 'Delete 鍵也可以';
 del.onclick = deleteSelected;
-const clr = el('button', 'kc-btn', '清除選取'); clr.disabled = locked || !selection; clr.onclick = () => { selection = null; refresh(); renderTools(); };
+const clr = el('button', 'kc-btn', '清除選取'); clr.disabled = locked || !p.selection; clr.onclick = () => { p.selection = null; refresh(); renderTools(); };
 tools.append(undo, del, clr);
 bottom.innerHTML = '';
-const summary = el('span', 'kc-title', `選取 ${selection ? 1 : 0} · 草稿 ${drafts.length} 條${pendingDel.size ? ` · 待刪 ${pendingDel.size}` : ''}${temp.length ? ` · agent 暫時線 ${temp.length}` : ''}`);
+const t = totals();
+const summary = el('span', 'kc-title', `選取 ${t.selections} · 草稿 ${t.drafts} 條${t.deletes ? ` · 待刪 ${t.deletes}` : ''}`);
 const send = el('button', 'kc-btn on kc-send', sent ? `已送出 ${sent.sub_id}` : '送出'); send.disabled = locked;
 send.onclick = submit;
 bottom.append(summary, send);
 if (sent?.hookFailed) { const again = el('button', 'kc-btn', '重送到 thread'); again.onclick = () => postHook(sent); bottom.appendChild(again); }
 }
 view.onDrawingDone = (d) => {
-drafts.push({ ...d, id: `draft-${drafts.length + 1}`, tf: panes[cur].tf, card_draft: true, created_by: { kind: 'human' }, path: `card/draft/draft-${drafts.length + 1}` });
+const p = P(); draftSeq += 1;
+p.drafts.push({ ...d, id: `draft-${draftSeq}`, pane: p.id, card_draft: true, created_by: { kind: 'human' }, path: `card/${p.id}/draft/${draftSeq}` });
 setMode(null); refresh();
 };
 view.onDrawingChange = (id, anchors) => {
-const d = drafts.find((x) => x.id === id);
+const p = P(), d = p.drafts.find((x) => x.id === id);
 if (d && !locked) d.anchors = anchors;
-else { const s0 = data.drawings.find((x) => x.id === id) || (data.temp_drawings || []).find((x) => x.id === id); const t = shared.find((x) => x.id === id) || temp.find((x) => x.id === id); if (s0 && t) t.anchors = s0.anchors.map((a) => ({ ...a })); }
+else {
+const t = shared.find((x) => x.id === id), s0 = data.drawings.find((x) => x.id === id);
+if (t && s0) t.anchors = s0.anchors.map((a) => ({ ...a }));
+const tt = p.temp.find((x) => x.id === id), t0 = (data.panes[cur].temp || []).find((x) => x.id === id);
+if (tt && t0) tt.anchors = t0.anchors.map((a) => ({ ...a }));
+}
 refresh();
 };
+view.onDrawingSelect = (id) => { selLine = id === 'sel' ? null : id; refresh(); renderTools(); };
 const paneRect = () => view.chart.getDom('candle_pane', 'main').getBoundingClientRect();
 const barIndex = (e) => {
 const r = paneRect();
 const pt = view.chart.convertFromPixel([{ x: e.clientX - r.left, y: e.clientY - r.top }], { paneId: 'candle_pane' })[0];
-const n = panes[cur].bars.length;
+const n = P().bars.length;
 return pt?.dataIndex == null ? null : Math.max(0, Math.min(n - 1, Math.round(pt.dataIndex)));
 };
 root.addEventListener('mousedown', (e) => {
@@ -2361,28 +2380,17 @@ if (mode !== 'select' || locked || e.button !== 0 || !chartEl.contains(e.target)
 const i0 = barIndex(e);
 if (i0 == null) return;
 e.stopImmediatePropagation(); e.preventDefault();
-selection = { tf: panes[cur].tf, i0, i1: i0 }; refresh();
-const mv = (ev) => { const i = barIndex(ev); if (i == null) return; selection = { ...selection, i0: Math.min(i0, i), i1: Math.max(i0, i) }; refresh(); };
+const p = P();
+p.selection = { i0, i1: i0 }; refresh();
+const mv = (ev) => { const i = barIndex(ev); if (i == null) return; p.selection = { i0: Math.min(i0, i), i1: Math.max(i0, i) }; refresh(); };
 const up = () => { document.removeEventListener('mousemove', mv, true); document.removeEventListener('mouseup', up, true); renderTools(); };
 document.addEventListener('mousemove', mv, true); document.addEventListener('mouseup', up, true);
 }, true);
-view.onDrawingSelect = (id) => { selLine = id === 'sel' ? null : id; refresh(); renderTools(); };
 root.tabIndex = -1;
 root.addEventListener('keydown', (e) => {
 if (e.key === 'Escape' && mode) setMode(null);
 if ((e.key === 'Delete' || e.key === 'Backspace') && selLine && !/^(TEXTAREA|INPUT)$/.test(e.target.tagName)) { e.preventDefault(); deleteSelected(); }
 });
-const selectionsOut = () => {
-if (!selection) return [];
-const n = numsOf(selection.tf), out = [];
-for (let i = selection.i0; i <= selection.i1; i++) {
-const x = n[i];
-if (!x) continue;
-const last = out.at(-1);
-if (last && last.date === x.date) last.to_bar = x.n; else out.push({ tf: selection.tf, date: x.date, from_bar: x.n, to_bar: x.n });
-}
-return out;
-};
 async function postHook(rec) {
 try {
 await fetch(cfg.hook, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ answer: rec.answer, sentAt: new Date().toISOString() }) });
@@ -2393,9 +2401,10 @@ renderTools();
 }
 async function submit() {
 if (locked) return;
-const body = { base_revision: data.base_revision, selections: selectionsOut(), note: noteEl.value.trim(),
-deletes: [...pendingDel].map((id) => ({ drawing_id: id, revision: data.base_revision })),
-drawings: drafts.map((d) => ({ kind: d.kind, tf: d.tf, anchors: d.anchors.map((a) => ({ ts: a.ts ?? Date.parse(a.time), price: a.price })) })) };
+const body = { base_revision: data.base_revision, note: noteEl.value.trim(),
+selections: panes.filter((p) => p.selection).map((p) => ({ pane: p.id, from_ts: p.bars[p.selection.i0].timestamp, to_ts: p.bars[p.selection.i1].timestamp })),
+drawings: panes.flatMap((p) => p.drafts.map((d) => ({ pane: p.id, kind: d.kind, anchors: d.anchors.map((a) => ({ ts: a.ts ?? Date.parse(a.time), price: a.price })) }))),
+deletes: panes.flatMap((p) => [...p.pendingDel].map((id) => ({ drawing_id: id, pane: p.id, revision: data.base_revision }))) };
 if (!body.selections.length && !body.drawings.length && !body.deletes.length && !body.note) return say('還沒有東西可以送：選 bar、畫草稿、標待刪，或寫備註。', true);
 say('送出中…');
 try {
@@ -2408,7 +2417,6 @@ noteEl.disabled = locked;
 renderLines();
 } catch (e) { say(`送出失敗：${e.message}。草稿保留。`, true); }
 }
-renderTools();
 show(0);
 if (window.ResizeObserver) new ResizeObserver(() => view.chart.resize()).observe(chartEl);
 }
