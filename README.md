@@ -18,3 +18,7 @@
 ## 打包
 
 `build.mjs` 在 trade-canvas 的原始碼目錄裡執行（`npm run build:card`）。它把 `card/shell.js` 和它 import 的模組（`public/core/*`、`indicators/*.js`）合成一個檔，並在輸出含有 tailnet 主機、IP 或帳號格式時拒絕寫入。
+
+## 授權備註
+
+`indicators/pa.js` 的 PA 結構規則（pivot、channel、range box）參考 PA_Agent（AGPL-3.0）的行為描述自行實作，沒有複製它的程式碼。

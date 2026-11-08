@@ -1,4 +1,4 @@
-/*! kcard — trade-canvas T3 card shell. Built from 20 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, card/shell.js */
+/*! kcard — trade-canvas T3 card shell. Built from 21 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, indicators/pa.js, card/indicators.js, card/shell.js */
 (function () {
 window.__kcardScript = document.currentScript;
 var __M = {};
@@ -230,6 +230,7 @@ __M['public/core/layers.js'] = (() => {
 function leaves(state, metas) {
 const out = [];
 for (const m of metas) out.push({ path: `indicators/${m.name}`, kind: 'indicator', ref: m.name, label: m.label });
+for (const m of metas) for (const it of m.items || []) out.push({ path: `${m.name.toLowerCase()}/${it.id}`, kind: 'pa', ref: m.name, label: it.label });
 out.push({ path: 'system/bar-number', kind: 'barno', label: 'bar 編號' });
 for (const c of state.intakeCleaners || []) out.push({ path: `system/intake/${c.name}`, kind: 'intake', label: c.label });
 for (const n of state.notes || []) out.push({ path: n.path, kind: 'note', ref: n.id, label: n.text });
@@ -630,7 +631,7 @@ const legends = [
 return { name: meta.name, calcParamsText: meta.paramsText ? `(${meta.paramsText})` : '', legends, features };
 },
 draw: meta.plot?.marks ? drawMarks : meta.plot?.custom === 'vrvp' ? drawVrvp : meta.plot?.custom === 'volOverlay' ? drawVolOverlay
-: meta.plot?.custom === 'gaps' ? drawGaps : null,
+: meta.plot?.custom === 'gaps' ? drawGaps : meta.plot?.custom === 'pa' ? drawPa : null,
 };
 }
 function drawGaps({ ctx, chart, indicator, bounding, xAxis, yAxis }) {
@@ -650,6 +651,50 @@ ctx.fillStyle = 'rgba(255,255,255,0.10)';
 ctx.fillRect(x0, Math.min(y0, y1), Math.max(1, Math.min(right, bounding.width) - x0), Math.max(1, Math.abs(y1 - y0)));
 ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1;
 ctx.beginPath(); ctx.moveTo(x0 + 0.5, Math.min(y0, y1)); ctx.lineTo(x0 + 0.5, Math.max(y0, y1)); ctx.stroke(); // faint left edge only
+}
+ctx.restore();
+return true;
+}
+function drawPa({ ctx, chart, indicator, xAxis, yAxis }) {
+const c = CTX.get(chart.id);
+const pa = indicator.result.at(-1)?.pa;
+if (!pa || !c?.paShow) return true;
+const data = chart.getDataList();
+const { from, to } = chart.getVisibleRange();
+const idx = (ts) => { const i = barIndexAt(data, ts); return i >= 0 && data[i].timestamp === ts ? i : null; };
+const X = (i) => xAxis.convertToPixel(i), Y = (p) => yAxis.convertToPixel(p);
+const half = chart.getBarSpace().halfBar;
+ctx.save();
+if (c.paShow.range) for (const r of pa.ranges || []) {
+const i0 = idx(r.from_ts), i1 = idx(r.to_ts);
+if (i0 == null || i1 == null || i1 < from || i0 > to) continue;
+const x0 = X(i0) - half, x1 = X(i1) + half, y0 = Y(r.top), y1 = Y(r.bottom);
+ctx.fillStyle = 'rgba(242,201,76,0.08)'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+ctx.strokeStyle = 'rgba(242,201,76,0.55)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+}
+if (c.paShow.channel) for (const ch of [pa.channel?.previous, pa.channel?.current]) {
+if (!ch) continue;
+const ia = idx(ch.line[0].ts), ib = idx(ch.line[1].ts);
+if (ia == null || ib == null || ib === ia) continue;
+const slope = (ch.line[1].price - ch.line[0].price) / (ib - ia), off = ch.parallel[0].price - ch.line[0].price;
+const end = ch.current ? data.length - 1 : Math.min(data.length - 1, ib + Math.round((ib - ia) / 2));
+ctx.strokeStyle = ch.current ? 'rgba(225,228,234,0.8)' : 'rgba(225,228,234,0.35)'; ctx.lineWidth = ch.current ? 1.2 : 1;
+ctx.setLineDash(ch.current ? [] : [5, 4]);
+for (const o of [0, off]) { ctx.beginPath(); ctx.moveTo(X(ia), Y(ch.line[0].price + o)); ctx.lineTo(X(end), Y(ch.line[0].price + o + slope * (end - ia))); ctx.stroke(); }
+ctx.setLineDash([]);
+}
+if (c.paShow.pivots) {
+ctx.font = '600 9px sans-serif'; ctx.textAlign = 'center';
+for (const p of pa.pivots || []) {
+const i = idx(p.ts);
+if (i == null || i < from - 1 || i > to) continue;
+const x = X(i), up = p.side === 'high', y = Y(p.price) + (up ? -5 : 5);
+const col = p.label === 'HH' || p.label === 'HL' ? T.up : p.label ? T.down : T.muted;
+ctx.fillStyle = col; ctx.beginPath();
+if (up) { ctx.moveTo(x - 3, y - 4); ctx.lineTo(x + 3, y - 4); ctx.lineTo(x, y); } else { ctx.moveTo(x - 3, y + 4); ctx.lineTo(x + 3, y + 4); ctx.lineTo(x, y); }
+ctx.closePath(); ctx.fill();
+if (p.label) { ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(p.label, x, up ? y - 5 : y + 5); }
+}
 }
 ctx.restore();
 return true;
@@ -1754,6 +1799,7 @@ ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
+ctx.paShow = { pivots: visible.has('pa/pivots'), channel: visible.has('pa/channel'), range: visible.has('pa/range') };
 ctx.drawings = (state.drawings || []).filter((d) => d.path && visible.has(d.path));
 if (ctx.selectedDrawing && !ctx.drawings.some((d) => d.id === ctx.selectedDrawing)) ctx.selectedDrawing = null;
 ctx.orders = state.orders || [];
@@ -2097,6 +2143,129 @@ return { groups, relation, squeeze_pct_threshold: SQUEEZE_PCT };
 }
 return { GROUPS, ANCHOR, SQUEEZE_PCT, PLOT_GROUPS, META, compute, describe };
 })();
+__M['indicators/pa.js'] = (() => {
+const FRACTAL = 2, ATR_N = 14, MIN_SWING_ATR = 0.5;
+const RANGE = { window: 10, overlap: 0.65, dojiInside: 0.4, widthAtr: 3, score: 0.6, dojiBody: 0.25 };
+const KEEP_PIVOTS = 60, KEEP_RANGES = 20;
+const META = {
+name: 'PA', label: 'PA 結構（pivots / channel / range）', paramsText: `fractal ${FRACTAL}, ${MIN_SWING_ATR} ATR`, pane: 'main', order: 55,
+defaultOn: true, plot: { custom: 'pa' },
+items: [{ id: 'pivots', label: 'pivots（HH / HL / LH / LL）', defaultOn: true }, { id: 'channel', label: 'channel', defaultOn: true }, { id: 'range', label: 'range box', defaultOn: false }],
+};
+function atrSeries(bars) {
+const out = new Array(bars.length).fill(null);
+let atr = null;
+for (let i = 0; i < bars.length; i++) {
+const b = bars[i], p = bars[i - 1];
+const tr = p ? Math.max(b.high - b.low, Math.abs(b.high - p.close), Math.abs(b.low - p.close)) : b.high - b.low;
+atr = i < ATR_N ? (atr == null ? tr : atr + (tr - atr) / (i + 1)) : atr + (tr - atr) / ATR_N; // Wilder
+out[i] = atr;
+}
+return out;
+}
+function pivots(bars, atr, last) {
+const raw = [];
+for (let i = FRACTAL; i <= last - FRACTAL; i++) {
+let hi = true, lo = true;
+for (let k = 1; k <= FRACTAL; k++) {
+if (!(bars[i].high >= bars[i - k].high && bars[i].high > bars[i + k].high)) hi = false;
+if (!(bars[i].low <= bars[i - k].low && bars[i].low < bars[i + k].low)) lo = false;
+}
+if (hi) raw.push({ i, side: 'high', price: bars[i].high });
+if (lo) raw.push({ i, side: 'low', price: bars[i].low });
+}
+const kept = [];
+for (const p of raw) {
+const prev = kept.at(-1);
+if (!prev) { kept.push(p); continue; }
+if (prev.side === p.side) {
+if (p.side === 'high' ? p.price > prev.price : p.price < prev.price) kept[kept.length - 1] = p;
+continue;
+}
+if (Math.abs(p.price - prev.price) >= MIN_SWING_ATR * (atr[p.i] || 0)) kept.push(p);
+}
+const lastOf = { high: null, low: null };
+return kept.map((p) => {
+const before = lastOf[p.side];
+const label = before == null ? null : p.side === 'high' ? (p.price > before.price ? 'HH' : 'LH') : (p.price > before.price ? 'HL' : 'LL');
+lastOf[p.side] = p;
+return { ...p, ts: bars[p.i].timestamp, label };
+});
+}
+function channelFrom(bars, piv, side, k, last) {
+const same = piv.filter((p) => p.side === side);
+const b = same[same.length - 1 - k], a = same[same.length - 2 - k];
+if (!a || !b || b.i === a.i) return null;
+const slope = (b.price - a.price) / (b.i - a.i);
+let ext = null;
+for (let i = a.i; i <= b.i; i++) {
+const v = side === 'high' ? bars[i].low : bars[i].high;
+if (ext == null || (side === 'high' ? v - (a.price + slope * (i - a.i)) < ext.off : v - (a.price + slope * (i - a.i)) > ext.off)) ext = { i, price: v, off: v - (a.price + slope * (i - a.i)) };
+}
+const at = (i, off = 0) => ({ ts: bars[Math.min(i, last)].timestamp, price: a.price + slope * (i - a.i) + off });
+return {
+base: side === 'high' ? 'highs' : 'lows', current: k === 0,
+line: [{ ts: a.ts, price: a.price }, { ts: b.ts, price: b.price }],
+parallel: [at(a.i, ext.off), at(b.i, ext.off)], through: { ts: bars[ext.i].timestamp, price: ext.price },
+slope_per_bar: slope, width: Math.abs(ext.off),
+at_last: { ts: bars[last].timestamp, line: a.price + slope * (last - a.i), parallel: a.price + slope * (last - a.i) + ext.off },
+};
+}
+function channels(bars, piv, last) {
+const highs = piv.filter((p) => p.side === 'high'), lows = piv.filter((p) => p.side === 'low');
+const h = highs.slice(-2), l = lows.slice(-2);
+const down = h.length === 2 && l.length === 2 && h[1].price < h[0].price && l[1].price < l[0].price;
+const up = h.length === 2 && l.length === 2 && h[1].price > h[0].price && l[1].price > l[0].price;
+const side = down ? 'high' : up ? 'low' : (h[0]?.i ?? -1) > (l[0]?.i ?? -1) ? 'high' : 'low';
+const dir = down ? 'down' : up ? 'up' : 'mixed';
+const cur = channelFrom(bars, piv, side, 0, last), prev = channelFrom(bars, piv, side, 1, last);
+return { dir, current: cur, previous: prev };
+}
+function ranges(bars, atr, last) {
+const W = RANGE.window, out = [];
+const overlap = (x, y) => { const inter = Math.min(x.high, y.high) - Math.max(x.low, y.low), uni = Math.max(x.high, y.high) - Math.min(x.low, y.low); return uni > 0 ? Math.max(0, inter) / uni : 1; };
+let box = null;
+for (let e = W - 1; e <= last; e++) {
+const s = e - W + 1;
+let ov = 0, di = 0, hi = -Infinity, lo = Infinity;
+for (let i = s; i <= e; i++) {
+const b = bars[i], p = bars[i - 1];
+if (i > s) ov += overlap(b, p);
+const range = b.high - b.low, body = Math.abs(b.close - b.open);
+const inside = p && b.high <= p.high && b.low >= p.low;
+if (inside || (range > 0 && body / range <= RANGE.dojiBody)) di += 1;
+hi = Math.max(hi, b.high); lo = Math.min(lo, b.low);
+}
+const mo = ov / (W - 1), share = di / W, width = (hi - lo) / (atr[e] || Infinity);
+const score = (mo >= RANGE.overlap ? 0.4 : 0) + (share >= RANGE.dojiInside ? 0.2 : 0) + (width <= RANGE.widthAtr ? 0.2 : 0);
+if (score >= RANGE.score) {
+if (box && s <= box.e + 1) { box.e = e; box.top = Math.max(box.top, hi); box.bottom = Math.min(box.bottom, lo); box.score = Math.max(box.score, score); }
+else { box = { s, e, top: hi, bottom: lo, score, overlap: mo, doji_inside: share, width_atr: width }; out.push(box); }
+}
+}
+return out.slice(-KEEP_RANGES).map((b) => ({ from_ts: bars[b.s].timestamp, to_ts: bars[b.e].timestamp, bars: b.e - b.s + 1, top: b.top, bottom: b.bottom,
+score: Math.round(b.score * 100) / 100, overlap: Math.round(b.overlap * 100) / 100, doji_inside: Math.round(b.doji_inside * 100) / 100, width_atr: Math.round(b.width_atr * 100) / 100, i0: b.s, i1: b.e }));
+}
+function structureAt(bars, i = bars.length - 1) {
+if (!bars.length) return null;
+const last = Math.max(0, Math.min(i, bars.length - 1));
+const atr = atrSeries(bars.slice(0, last + 1));
+const piv = pivots(bars, atr, last);
+const ch = channels(bars, piv, last);
+const rs = ranges(bars, atr, last);
+const strip = ({ i: _i, i0: _a, i1: _b, ...x }) => x;
+return {
+atr: atr[last], pivots: piv.slice(-KEEP_PIVOTS).map(strip), channel: { dir: ch.dir, current: ch.current, previous: ch.previous },
+ranges: rs.map(strip), active_range: (() => { const r = rs.at(-1); return r && r.i1 >= last - 1 ? strip(r) : null; })(),
+};
+}
+function compute(bars) {
+const rows = bars.map(() => ({}));
+if (bars.length) rows[rows.length - 1] = { pa: structureAt(bars) };
+return rows;
+}
+return { FRACTAL, RANGE, META, structureAt, compute };
+})();
 __M['card/indicators.js'] = (() => {
 const { META: GAP_M, compute: gap } = __M['indicators/gap.js'];
 const { META: VOL_M, compute: vol } = __M['indicators/vol.js'];
@@ -2107,8 +2276,9 @@ const { META: BOLL_M, compute: boll } = __M['indicators/boll.js'];
 const { META: MACD_M, compute: macd } = __M['indicators/macd.js'];
 const { META: KDJ_M, compute: kdj } = __M['indicators/kdj.js'];
 const { META: GMMA_M, compute: gmma } = __M['indicators/gmma.js'];
+const { META: PA_M, compute: pa } = __M['indicators/pa.js'];
 const COMPUTE = Object.fromEntries([[GAP_M, gap], [VOL_M, vol], [VRVP_M, vrvp], [MA_M, ma], [VWAP_M, vwap],
-[BOLL_M, boll], [MACD_M, macd], [KDJ_M, kdj], [GMMA_M, gmma]].map(([m, f]) => [m.name, f]));
+[BOLL_M, boll], [MACD_M, macd], [KDJ_M, kdj], [GMMA_M, gmma], [PA_M, pa]].map(([m, f]) => [m.name, f]));
 return { COMPUTE };
 })();
 __M['card/shell.js'] = (() => {
@@ -2229,7 +2399,7 @@ else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length
 const hidden = new Set();
 if (p.focus === 'temp' || (p.focus == null && p.latest === false)) for (const d of shared) hidden.add(d.id);
 else if (Array.isArray(p.focus)) for (const d of shared) if (!p.focus.includes(d.id)) hidden.add(d.id);
-return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, bars, rows, nums: barNumbers(bars, p.tf),
+return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, pa: Array.isArray(p.pa) ? p.pa : null, bars, rows, nums: barNumbers(bars, p.tf),
 temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new Set(), selection: null };
 });
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
@@ -2239,8 +2409,9 @@ const offGroups = {};
 let cur = 0, mode = null, locked = false, sent = null, selLine = null, draftSeq = 0;
 const P = () => panes[cur];
 const visible = () => {
-const off = GROUPS.filter((g) => offGroups[g.id]);
-return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/') || (shown(p, data.off) && !off.some((g) => g.re.test(p)))));
+const off = GROUPS.filter((g) => offGroups[g.id]), pick = P().pa;
+return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/')
+|| (Array.isArray(pick) && p.startsWith('pa/') ? pick.includes(p.slice(3)) && !offGroups.indicators : shown(p, data.off) && !off.some((g) => g.re.test(p)))));
 };
 const daily = (p) => p.bars.length > 1 && p.bars[1].timestamp - p.bars[0].timestamp >= 864e5 * 0.9;
 const dateOf = (ts) => new Date(ts).toLocaleDateString('sv-SE', { timeZone: 'America/New_York' });
