@@ -1,4 +1,4 @@
-/*! kcard — trade-canvas T3 card shell. Built from 21 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, public/core/readout.js, card/shell.js */
+/*! kcard — trade-canvas T3 card shell. Built from 22 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, public/core/readout.js, public/core/report.js, card/shell.js */
 (function () {
 window.__kcardScript = document.currentScript;
 var __M = {};
@@ -234,6 +234,7 @@ for (const m of metas) for (const it of m.items || []) out.push({ path: `${m.nam
 out.push({ path: 'system/bar-number', kind: 'barno', label: 'bar 編號' });
 for (const c of state.intakeCleaners || []) out.push({ path: `system/intake/${c.name}`, kind: 'intake', label: c.label });
 for (const n of state.notes || []) out.push({ path: n.path, kind: 'note', ref: n.id, label: n.text });
+for (const r of state.reports || []) out.push({ path: r.path, kind: 'report', ref: r.id, label: r.title });
 for (const o of state.orders || []) {
 const base = tradePath(state, o);
 const kind = o.kind === 'plan' ? 'plan' : 'order';
@@ -1010,6 +1011,7 @@ note: { icon: '✎', title: 'Note' },
 signal: { icon: '◆', title: 'Signal' },
 event: { icon: '⚡', title: '事件' },
 fill: { icon: '$', title: '成交' },
+report: { icon: '▤', title: '報告' }, // p1.56: PA report card at its as-of bar
 };
 function inLoaded(data, ts) {
 if (!data.length) return false;
@@ -1031,10 +1033,11 @@ const side = f.side === 'buy' ? '買' : f.side === 'sell' ? '賣' : f.side;
 add(f.ts, { kind: 'fill', side: f.side, author: f.author, agent: f.path.startsWith('agent/') ? f.path.split('/')[1] : null,
 title: f.text, body: `${side} ${f.qty ?? ''} ${f.contract ?? ''}`.replace(/\s+/g, ' ').trim(), ts: f.ts, price: f.price, path: f.path });
 }
+for (const r of c.reports || []) add(r.as_of_ts, { kind: 'report', author: 'agent', agent: 'report', title: r.title, body: r.bull != null ? `多 ${r.bull}% / 空 ${r.bear}%（偏向，不是勝率）` : '', ts: r.as_of_ts, path: r.path, reportId: r.id });
 for (const s of c.signals) for (const t of s.triggers || []) add(t.ts, { kind: 'signal', author: s.author, agent: s.agent, title: s.name, body: t.note || '', ts: t.ts, price: t.price, path: s.path });
 return by;
 }
-const KIND_ORDER = ['fill', 'note', 'signal', 'event'];
+const KIND_ORDER = ['fill', 'report', 'note', 'signal', 'event'];
 function drawEventRow(ctx, c, data, from, to, bounding, xAxis) {
 c.eventHits = [];
 const bars = [...eventsByBar(c, data)].filter(([i]) => i >= from && i < to).sort((a, b) => a[0] - b[0]);
@@ -1066,6 +1069,10 @@ if (kind === 'fill') {
 const sides = new Set(items.map((it) => it.side));
 ctx.fillStyle = sides.size > 1 || sides.has('spread') ? T.agent : sides.has('buy') ? T.up : T.down;
 ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+} else if (kind === 'report') { // p1.56: gold square, distinct from note circles
+ctx.fillStyle = '#f2c94c';
+ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(g.x - EV_R, y - EV_R, EV_R * 2, EV_R * 2, 3); else ctx.rect(g.x - EV_R, y - EV_R, EV_R * 2, EV_R * 2);
+ctx.fill(); ctx.stroke();
 } else if (authors.size > 1) { // mixed: left half human, right half agent
 ctx.fillStyle = T.human; ctx.beginPath(); ctx.arc(g.x, y, EV_R, Math.PI / 2, Math.PI * 1.5); ctx.fill();
 ctx.fillStyle = T.agent; ctx.beginPath(); ctx.arc(g.x, y, EV_R, -Math.PI / 2, Math.PI / 2); ctx.fill();
@@ -1074,7 +1081,7 @@ ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.stroke();
 ctx.fillStyle = authors.has('agent') ? T.agent : T.human;
 ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 }
-ctx.fillStyle = T.badgeText; ctx.font = kind === 'fill' ? '700 11px sans-serif' : '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+ctx.fillStyle = kind === 'report' ? '#131722' : T.badgeText; ctx.font = kind === 'fill' ? '700 11px sans-serif' : '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 ctx.fillText(EVENT_KINDS[kind].icon, g.x, y + 0.5);
 if (items.length > 1) {
 const t = items.length > 99 ? '99+' : String(items.length);
@@ -1462,7 +1469,7 @@ const OHLC = [
 ];
 let collapsed = legendCollapsed;
 let onLegendFold = null;
-const ctx = { tf: 'M5', bars: [], barNo: [], notes: [], fills: [], signals: [], orders: [], drawings: [], quotes: {}, hot: null, dragPrice: {}, levelHits: [], showBarNo: true, compact, legendOpen: { ...legendOpen }, rows: {} };
+const ctx = { tf: 'M5', bars: [], barNo: [], notes: [], reports: [], fills: [], signals: [], orders: [], drawings: [], quotes: {}, hot: null, dragPrice: {}, levelHits: [], showBarNo: true, compact, legendOpen: { ...legendOpen }, rows: {} };
 barNoAt = (ts) => { const i = barIndexAt(ctx.bars, ts); return i >= 0 && ctx.bars[i].timestamp === ts ? ctx.barNo[i]?.n ?? null : null; };
 const updateTitleH = () => {
 const rows = collapsed ? 0 : 2 + chart.getIndicators({ paneId: CANDLE }).filter((i) => i.name !== '__SYS').length;
@@ -1870,6 +1877,7 @@ fitSubPanes();
 updateTitleH();
 ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
+ctx.reports = (state.reports || []).filter((r) => visible.has(r.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
 ctx.paShow = Object.fromEntries(['ranges', 'channels', 'wm', 'events', 'zones'].map((x) => [x, visible.has(`pa/${x}`)]));
@@ -2302,6 +2310,103 @@ const READOUT_CSS = `
 .ro-b{min-height:16px}`;
 return { fmtVol, quoteOf, barOf, renderQuote, renderBar, READOUT_CSS };
 })();
+__M['public/core/report.js'] = (() => {
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const REPORT_CSS = `
+.kc-report{margin:8px 0 6px;border:1px solid var(--border,#2a2e39);border-radius:6px;padding:8px 10px;display:grid;grid-template-columns:1fr;gap:8px}
+.kc-report h3{margin:0;font-size:14px;line-height:1.35}
+.kc-report .sub{color:var(--muted-foreground,#787b86);font-size:11px}
+.kc-dir{display:flex;flex-direction:column;gap:3px}
+.kc-dir .bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--border,#2a2e39)}
+.kc-dir .bull{background:#26a69a}.kc-dir .bear{background:#ef5350}
+.kc-dir .nums{display:flex;justify-content:space-between;font-weight:600;font-size:12px}
+.kc-dir .nums .b{color:#26a69a}.kc-dir .nums .s{color:#ef5350}
+.kc-dir .lbl{color:var(--muted-foreground,#787b86);font-size:11px}
+.kc-kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px}.kc-kv b{font-weight:600}
+.kc-report p{margin:0}.kc-report .k{color:var(--muted-foreground,#787b86);font-size:11px;display:block}
+.kc-report ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.kc-contrib{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.kc-contrib .row{display:grid;grid-template-columns:minmax(0,1.3fr) 1fr 44px;gap:6px;align-items:center;font-size:11px}
+.kc-contrib .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kc-contrib .track{position:relative;height:8px;background:var(--border,#2a2e39);border-radius:4px}
+.kc-contrib .track::after{content:'';position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--muted-foreground,#787b86)}
+.kc-contrib .b{position:absolute;left:50%;top:0;bottom:0;background:#26a69a;border-radius:0 4px 4px 0}
+.kc-contrib .s{position:absolute;right:50%;top:0;bottom:0;background:#ef5350;border-radius:4px 0 0 4px}
+.kc-contrib .v{text-align:right;font-variant-numeric:tabular-nums}
+.kc-tfs{display:flex;flex-direction:column;gap:4px;margin-top:6px;font-size:11px}
+.kc-tfs .row{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--border,#2a2e39);padding-top:3px}
+.kc-tfs .rs{color:var(--muted-foreground,#787b86)}
+.kc-report ul.src{margin:2px 0 0;padding-left:16px;font-size:11px;color:var(--muted-foreground,#787b86);word-break:break-all}
+@container kcard (min-width:640px){.kc-report{grid-template-columns:minmax(220px,1fr) 2fr;column-gap:16px}.kc-report .head{grid-column:1/-1}}
+`;
+function renderReport(r, panes, { layout = 'card' } = {}) {
+const box = el('section', 'kc-report');
+const head = el('div', 'head');
+const pane = panes.find((p) => p.id === r.pane);
+head.append(el('h3', null, r.title), el('div', 'sub', `${pane?.label || r.tf || ''}${r.as_of_et ? ` · 截至 ${r.as_of_et} ET` : ''}${r.engine ? ` · ${r.engine} · ${r.profile}` : ''}`));
+const left = el('div', 'kc-dir');
+const d = r.direction;
+if (d) {
+const bar = el('div', 'bar'), bu = el('div', 'bull'), be = el('div', 'bear');
+bu.style.width = `${d.bull}%`; be.style.width = `${d.bear}%`; bar.append(bu, be);
+const nums = el('div', 'nums'); nums.append(el('span', 'b', `多 ${d.bull.toFixed(1)}%`), el('span', 's', `空 ${d.bear.toFixed(1)}%`));
+left.append(nums, bar, el('div', 'lbl', d.label || '偏向，不是勝率'));
+if (d.by_tf?.length) left.append(el('div', 'lbl', d.by_tf.map((x) => `${x.tf} z ${x.z > 0 ? '+' : ''}${x.z}`).join(' · ')));
+} else left.append(el('div', 'lbl', r.error || '沒有方向分數'));
+const kv = el('div', 'kc-kv');
+const sign = (v) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
+if (r.ema20_dist_atr != null) { const x = el('span'); x.append('EMA20 距離 ', el('b', null, `${sign(r.ema20_dist_atr)} ×ATR`)); kv.append(x); }
+if (r.atr14 != null) { const x = el('span'); x.append(`ATR14（${r.tf}）`, el('b', null, r.atr14.toFixed(2))); kv.append(x); }
+left.append(kv);
+const cs = (r.contributions || []).filter((c) => c.contribution);
+if (cs.length) {
+const max = Math.max(...cs.map((c) => Math.abs(c.contribution)), 1e-9);
+const wrap = el('div', 'kc-contrib');
+wrap.append(el('div', 'lbl', `${r.tf} 各項貢獻（權重：${r.weights_source === 'hand' ? '手調' : r.weights_source || '—'}）`));
+for (const c of [...cs].sort((a, b) => b.contribution - a.contribution)) {
+const row = el('div', 'row'), name = el('span', 'nm', c.label || c.item), track = el('span', 'track'), bar = el('span', c.contribution > 0 ? 'b' : 's');
+bar.style.width = `${(50 * Math.abs(c.contribution)) / max}%`;
+track.append(bar);
+row.append(name, track, el('span', 'v', `${c.contribution > 0 ? '+' : ''}${c.contribution.toFixed(3)}`));
+row.title = `值 ${c.value} × 權重 ${c.weight}`;
+wrap.append(row);
+}
+left.append(wrap);
+}
+const tfs = Object.entries(r.by_tf || {});
+let tfsEl = null;
+if (tfs.length) {
+const t = el('div', 'kc-tfs');
+for (const [tf, x] of tfs) {
+const row = el('div', 'row');
+row.append(el('b', null, tf), el('span', null, `最後一根：${x.candles || '—'}`), el('span', 'rs', `區間：${x.range_state || '—'}`));
+t.append(row);
+}
+tfsEl = t;
+}
+const right = el('div');
+right.style.display = 'flex'; right.style.flexDirection = 'column'; right.style.gap = '6px';
+if (tfsEl) (layout === 'web' ? right : left).append(tfsEl);
+if (r.meaning) { const p = el('p'); p.append(el('span', 'k', '意義'), r.meaning); right.append(p); }
+if (r.observation) { const p = el('p'); p.append(el('span', 'k', '觀察'), r.observation); right.append(p); }
+const ol = el('ol'); for (const t of r.points || []) ol.append(el('li', null, t));
+const pts = el('div'); pts.append(el('span', 'k', '重點'), ol); right.append(pts);
+if (r.news_chips?.text) {
+const p = el('div'); p.append(el('span', 'k', '新聞與籌碼（agent 整理，引擎不算）'), el('p', null, r.news_chips.text));
+if (r.news_chips.sources?.length) { const ul = el('ul', 'src'); for (const x of r.news_chips.sources) ul.append(el('li', null, x)); p.append(ul); }
+right.append(p);
+}
+if (r.user_view?.length) {
+const p = el('div'); p.append(el('span', 'k', '使用者看法'));
+const STANCE = { agree: '同意', disagree: '不同意', partly: '部分同意' };
+for (const u of r.user_view) { const q = el('p'); q.append(el('b', null, `${STANCE[u.stance] || u.stance}`), ` · note ${u.note_id}${u.note ? `「${u.note}」` : ''}：${u.evidence}`); p.append(q); }
+right.append(p);
+}
+box.append(head, left, right);
+return box;
+}
+return { REPORT_CSS, renderReport };
+})();
 __M['card/shell.js'] = (() => {
 const { registerAll, createCanvasChart } = __M['public/core/chart.js'];
 const { T } = __M['public/core/theme.js'];
@@ -2310,6 +2415,7 @@ const { barNumbers } = __M['public/core/time.js'];
 const { unpackRows } = __M['public/core/wire.js'];
 const { COMPUTE } = __M['card/indicators.js'];
 const { quoteOf, barOf, renderQuote, renderBar, READOUT_CSS } = __M['public/core/readout.js'];
+const { renderReport, REPORT_CSS } = __M['public/core/report.js'];
 const KLINE = 'https://cdn.jsdelivr.net/npm/klinecharts@10.1.0/dist/umd/klinecharts.min.js';
 const GROUPS = [
 { id: 'indicators', label: '指標', re: /^indicators\// }, { id: 'human', label: 'human', re: /^human\// },
@@ -2350,31 +2456,6 @@ const CSS = `
 .kc-tab.miss::after{content:' ⚠'}
 .kc-miss{color:var(--warning,#f2c94c);font-size:11px;margin-bottom:4px}
 .kc.kc-rep{min-height:1400px}
-.kc-report{margin:8px 0 6px;border:1px solid var(--border,#2a2e39);border-radius:6px;padding:8px 10px;display:grid;grid-template-columns:1fr;gap:8px}
-.kc-report h3{margin:0;font-size:14px;line-height:1.35}
-.kc-report .sub{color:var(--muted-foreground,#787b86);font-size:11px}
-.kc-dir{display:flex;flex-direction:column;gap:3px}
-.kc-dir .bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--border,#2a2e39)}
-.kc-dir .bull{background:#26a69a}.kc-dir .bear{background:#ef5350}
-.kc-dir .nums{display:flex;justify-content:space-between;font-weight:600;font-size:12px}
-.kc-dir .nums .b{color:#26a69a}.kc-dir .nums .s{color:#ef5350}
-.kc-dir .lbl{color:var(--muted-foreground,#787b86);font-size:11px}
-.kc-kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px}.kc-kv b{font-weight:600}
-.kc-report p{margin:0}.kc-report .k{color:var(--muted-foreground,#787b86);font-size:11px;display:block}
-.kc-report ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
-.kc-contrib{display:flex;flex-direction:column;gap:2px;margin-top:4px}
-.kc-contrib .row{display:grid;grid-template-columns:minmax(0,1.3fr) 1fr 44px;gap:6px;align-items:center;font-size:11px}
-.kc-contrib .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kc-contrib .track{position:relative;height:8px;background:var(--border,#2a2e39);border-radius:4px}
-.kc-contrib .track::after{content:'';position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--muted-foreground,#787b86)}
-.kc-contrib .b{position:absolute;left:50%;top:0;bottom:0;background:#26a69a;border-radius:0 4px 4px 0}
-.kc-contrib .s{position:absolute;right:50%;top:0;bottom:0;background:#ef5350;border-radius:4px 0 0 4px}
-.kc-contrib .v{text-align:right;font-variant-numeric:tabular-nums}
-.kc-tfs{display:flex;flex-direction:column;gap:4px;margin-top:6px;font-size:11px}
-.kc-tfs .row{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--border,#2a2e39);padding-top:3px}
-.kc-tfs .rs{color:var(--muted-foreground,#787b86)}
-.kc-report ul.src{margin:2px 0 0;padding-left:16px;font-size:11px;color:var(--muted-foreground,#787b86);word-break:break-all}
-@container kcard (min-width:640px){.kc-report{grid-template-columns:minmax(220px,1fr) 2fr;column-gap:16px}.kc-report .head{grid-column:1/-1}}
 @media (max-width:480px){.kc{min-height:720px}.kc.kc-rep{min-height:2150px}.kc-chart{height:380px}.kc-tab{max-width:120px}}
 .kc{container:kcard/inline-size}`;
 function loadKline() {
@@ -2401,76 +2482,12 @@ text: cv('--foreground', T.text), muted: cv('--muted-foreground', T.muted), huma
 });
 }
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-function renderReport(r, panes) {
-const box = el('section', 'kc-report');
-const head = el('div', 'head');
-const pane = panes.find((p) => p.id === r.pane);
-head.append(el('h3', null, r.title), el('div', 'sub', `${pane?.label || r.tf || ''}${r.as_of_et ? ` · 截至 ${r.as_of_et} ET` : ''}${r.engine ? ` · ${r.engine} · ${r.profile}` : ''}`));
-const left = el('div', 'kc-dir');
-const d = r.direction;
-if (d) {
-const bar = el('div', 'bar'), bu = el('div', 'bull'), be = el('div', 'bear');
-bu.style.width = `${d.bull}%`; be.style.width = `${d.bear}%`; bar.append(bu, be);
-const nums = el('div', 'nums'); nums.append(el('span', 'b', `多 ${d.bull.toFixed(1)}%`), el('span', 's', `空 ${d.bear.toFixed(1)}%`));
-left.append(nums, bar, el('div', 'lbl', d.label || '偏向，不是勝率'));
-if (d.by_tf?.length) left.append(el('div', 'lbl', d.by_tf.map((x) => `${x.tf} z ${x.z > 0 ? '+' : ''}${x.z}`).join(' · ')));
-} else left.append(el('div', 'lbl', r.error || '沒有方向分數'));
-const kv = el('div', 'kc-kv');
-const sign = (v) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
-if (r.ema20_dist_atr != null) { const x = el('span'); x.append('EMA20 距離 ', el('b', null, `${sign(r.ema20_dist_atr)} ×ATR`)); kv.append(x); }
-if (r.atr14 != null) { const x = el('span'); x.append(`ATR14（${r.tf}）`, el('b', null, r.atr14.toFixed(2))); kv.append(x); }
-left.append(kv);
-const cs = (r.contributions || []).filter((c) => c.contribution);
-if (cs.length) {
-const max = Math.max(...cs.map((c) => Math.abs(c.contribution)), 1e-9);
-const wrap = el('div', 'kc-contrib');
-wrap.append(el('div', 'lbl', `${r.tf} 各項貢獻（權重：${r.weights_source === 'hand' ? '手調' : r.weights_source || '—'}）`));
-for (const c of [...cs].sort((a, b) => b.contribution - a.contribution)) {
-const row = el('div', 'row'), name = el('span', 'nm', c.label || c.item), track = el('span', 'track'), bar = el('span', c.contribution > 0 ? 'b' : 's');
-bar.style.width = `${(50 * Math.abs(c.contribution)) / max}%`;
-track.append(bar);
-row.append(name, track, el('span', 'v', `${c.contribution > 0 ? '+' : ''}${c.contribution.toFixed(3)}`));
-row.title = `值 ${c.value} × 權重 ${c.weight}`;
-wrap.append(row);
-}
-left.append(wrap);
-}
-const tfs = Object.entries(r.by_tf || {});
-if (tfs.length) {
-const t = el('div', 'kc-tfs');
-for (const [tf, x] of tfs) {
-const row = el('div', 'row');
-row.append(el('b', null, tf), el('span', null, `最後一根：${x.candles || '—'}`), el('span', 'rs', `區間：${x.range_state || '—'}`));
-t.append(row);
-}
-left.append(t);
-}
-const right = el('div');
-right.style.display = 'flex'; right.style.flexDirection = 'column'; right.style.gap = '6px';
-if (r.meaning) { const p = el('p'); p.append(el('span', 'k', '意義'), r.meaning); right.append(p); }
-if (r.observation) { const p = el('p'); p.append(el('span', 'k', '觀察'), r.observation); right.append(p); }
-const ol = el('ol'); for (const t of r.points || []) ol.append(el('li', null, t));
-const pts = el('div'); pts.append(el('span', 'k', '重點'), ol); right.append(pts);
-if (r.news_chips?.text) {
-const p = el('div'); p.append(el('span', 'k', '新聞與籌碼（agent 整理，引擎不算）'), el('p', null, r.news_chips.text));
-if (r.news_chips.sources?.length) { const ul = el('ul', 'src'); for (const x of r.news_chips.sources) ul.append(el('li', null, x)); p.append(ul); }
-right.append(p);
-}
-if (r.user_view?.length) {
-const p = el('div'); p.append(el('span', 'k', '使用者看法'));
-const STANCE = { agree: '同意', disagree: '不同意', partly: '部分同意' };
-for (const u of r.user_view) { const q = el('p'); q.append(el('b', null, `${STANCE[u.stance] || u.stance}`), ` · note ${u.note_id}${u.note ? `「${u.note}」` : ''}：${u.evidence}`); p.append(q); }
-right.append(p);
-}
-box.append(head, left, right);
-return box;
-}
 async function boot(script) {
 let cfg = null;
 let prev = script?.previousElementSibling;
 while (prev && !(prev.tagName === 'SCRIPT' && prev.type === 'text/kcard')) prev = prev.previousElementSibling;
 try { cfg = JSON.parse((prev || document.querySelector('script[type="text/kcard"]'))?.textContent || 'null'); } catch { cfg = null; }
-if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS + READOUT_CSS; document.head.appendChild(st); }
+if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS + REPORT_CSS + READOUT_CSS; document.head.appendChild(st); }
 const root = el('div', `kc${cfg?.r ? ' kc-rep' : ''}`); // p1.54: a report card reserves room for its panel
 if (script && document.body?.contains(script)) script.parentNode.insertBefore(root, script.nextSibling);
 else if (document.body) document.body.appendChild(root);
