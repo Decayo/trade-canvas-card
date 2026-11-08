@@ -1,4 +1,4 @@
-/*! kcard — trade-canvas T3 card shell. Built from 20 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, card/shell.js */
+/*! kcard — trade-canvas T3 card shell. Built from 21 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, public/core/readout.js, card/shell.js */
 (function () {
 window.__kcardScript = document.currentScript;
 var __M = {};
@@ -675,9 +675,21 @@ queue.push({ text, col, bx, by: base === 'bottom' ? y - 13 : y, w, dir: base ===
 };
 const flush = () => {
 const placed = [];
-const hit = (a, by) => by < 0 || by > H - 13 || placed.some((b) => a.bx < b.bx + b.w && b.bx < a.bx + a.w && by < b.by + 13 && b.by < by + 13);
+const td = chart.getIndicators({ name: 'TD' })[0];
+const tdRows = td?.visible ? c.rows?.TD : null;
+if (tdRows) for (let i = Math.max(0, from); i < to; i++) {
+const r = tdRows[i], d = data[i];
+if (!r?.marks?.length || !d) continue;
+let above = 0, below = 0;
+for (const m of r.marks) {
+const off = 15 + (m.above ? above++ : below++) * 21;
+const y = m.above ? Y(d.high) - off : Y(d.low) + off;
+placed.push({ bx: X(i) - 12, w: 24, by: y - 9.5, obstacle: true });
+}
+}
+const hit = (a, by) => by < 0 || by > H - 13 || placed.some((b) => a.bx < b.bx + b.w && b.bx < a.bx + a.w && by < b.by + (b.obstacle ? 19 : 13) && b.by < by + 13);
 for (const q of queue.sort((a, b) => b.prio - a.prio || a.by - b.by)) {
-const tries = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((k) => q.by + k * q.dir * 14);
+const tries = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6].map((k) => q.by + k * q.dir * 14);
 const by = tries.find((y) => !hit(q, y));
 if (by == null && q.prio <= 1) continue;
 q.by = by ?? q.by;
@@ -1505,7 +1517,17 @@ onLegendToggle?.(name, ctx.legendOpen[name]);
 });
 const redraw = () => chart.overrideIndicator({ name: '__SYS', paneId: CANDLE, calcParams: [Date.now() % 1e6] });
 const pulseTimer = interactive ? setInterval(() => { if (ctx.pulsing && !dragging) redraw(); }, 50) : null;
+let hoverIdx = null;
+const setHover = (i) => { if (i !== hoverIdx) { hoverIdx = i; onBarHover?.(i); } };
+el.addEventListener('mouseleave', () => setHover(null));
 chart.subscribeAction('onCrosshairChange', (cr) => {
+let hi = null;
+if (cr?.x != null) {
+const di = cr.dataIndex ?? chart.convertFromPixel([{ x: cr.x, y: cr.y ?? 0 }], { paneId: CANDLE })[0]?.dataIndex;
+const n = chart.getDataList().length;
+hi = di == null || !n ? null : Math.max(0, Math.min(n - 1, Math.round(di)));
+}
+setHover(hi);
 if (dragging || cr?.x == null || cr.y == null) return;
 const hit = ctx.levelHits.find((h) => cr.x >= h.x0 && cr.x <= h.x1 && cr.y >= h.y0 && cr.y <= h.y1);
 const id = hit?.id ?? null;
@@ -1763,7 +1785,7 @@ chart.setPaneOptions({ id: paneId, height: on ? each : 24, minHeight: 24 });
 }
 if (typeof ResizeObserver !== 'undefined' && interactive) new ResizeObserver(() => fitSubPanes()).observe(el);
 let vpRaf = 0, onVisibleChange = null, onLegDrag = null, onFocusChange = null, onEdgeRetry = null, onGroupMove = null, onTradeAction = null,
-onDrawingDone = null, onDrawingChange = null, onDrawingSelect = null, onDrawingEdit = null;
+onDrawingDone = null, onDrawingChange = null, onDrawingSelect = null, onDrawingEdit = null, onBarHover = null;
 chart.subscribeAction('onVisibleRangeChange', () => {
 if (vpRaf) return;
 const raf = globalThis.requestAnimationFrame || ((f) => setTimeout(f, 16)); // Node (headless snapshot) has no rAF
@@ -1772,6 +1794,7 @@ vpRaf = raf(() => { vpRaf = 0; onVisibleChange?.(); });
 const api = {
 chart, ctx,
 set onVisibleChange(fn) { onVisibleChange = fn; },
+set onBarHover(fn) { onBarHover = fn; },
 set onLegDrag(fn) { onLegDrag = fn; },
 set onFocusChange(fn) { onFocusChange = fn; },
 set onEdgeRetry(fn) { onEdgeRetry = fn; },
@@ -1798,6 +1821,7 @@ set onEye(fn) { onEye = fn; },
 set onLegendFold(fn) { onLegendFold = fn; },
 setBars(symbol, tf, bars, loadOlder) {
 ctx.tf = tf; ctx.bars = bars; ctx.barNo = barNumbers(bars, tf);
+queueMicrotask(() => onBarHover?.(null)); // p1.55.1: new data -> the readout shows the last bar
 ctx.rows = {};
 for (const [name, paneId] of active) chart.removeIndicator({ name, paneId });
 active.clear();
@@ -2206,6 +2230,66 @@ const COMPUTE = Object.fromEntries([[GAP_M, gap], [VOL_M, vol], [VRVP_M, vrvp], 
 [BOLL_M, boll], [MACD_M, macd], [KDJ_M, kdj], [GMMA_M, gmma]].map(([m, f]) => [m.name, f]));
 return { COMPUTE };
 })();
+__M['public/core/readout.js'] = (() => {
+const { PERIODS, etParts } = __M['public/core/time.js'];
+const daily = (tf) => (PERIODS[tf]?.min || 0) >= 1440 || !!PERIODS[tf]?.months;
+const num = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toFixed(d));
+const fmtVol = (v) => (v == null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(Math.round(v)));
+const signed = (v, d = 2) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}`);
+function quoteOf(all, tf) {
+if (!all?.length) return null;
+const last = all.at(-1);
+if (daily(tf)) {
+const prev = all.at(-2);
+return { last: last.close, prior: prev?.close ?? null, o: last.open, h: last.high, l: last.low, v: last.volume, asOf: last.timestamp, daily: true, day: etParts(last.timestamp).dateKey };
+}
+const day = etParts(last.timestamp).dateKey;
+let k = all.length - 1;
+while (k > 0 && etParts(all[k - 1].timestamp).dateKey === day) k--;
+const sess = all.slice(k);
+const per = PERIODS[tf];
+return {
+last: last.close, prior: k > 0 ? all[k - 1].close : null, o: sess[0].open, h: Math.max(...sess.map((b) => b.high)), l: Math.min(...sess.map((b) => b.low)),
+v: sess.reduce((s, b) => s + (b.volume || 0), 0), asOf: last.close_ts ?? last.timestamp + (per?.min || 0) * 60000, day,
+};
+}
+function barOf(all, i, tf, n) {
+const b = all[i];
+if (!b) return null;
+const prev = all[i - 1];
+const e = etParts(b.timestamp);
+return { tf, n: n ?? null, date: e.dateKey, time: daily(tf) ? null : e.hhmm, weekday: e.weekday, o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume,
+chg: prev ? b.close - prev.close : null, pct: prev ? ((b.close - prev.close) / prev.close) * 100 : null, range: b.high - b.low };
+}
+const span = (cls, text) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
+const tone = (v) => (v > 0 ? 'up' : v < 0 ? 'dn' : '');
+function renderQuote(el, q, { symbol, snapshot = false } = {}) {
+el.innerHTML = '';
+if (!q) return;
+const chg = q.prior != null ? q.last - q.prior : null, pct = q.prior ? (chg / q.prior) * 100 : null;
+const e = etParts(q.asOf);
+el.append(span('sym', symbol || ''), span('px', num(q.last)), span(`chg ${tone(chg)}`, `${signed(chg)} (${signed(pct)}%)`),
+span('kv', `開 ${num(q.o)}`), span('kv', `高 ${num(q.h)}`), span('kv', `低 ${num(q.l)}`), span('kv', `量 ${fmtVol(q.v)}`),
+span('asof', `${snapshot ? '截至' : '最新'} ${e.dateKey.slice(5)} ${q.daily ? '收盤' : `${e.hhmm} ET`}${snapshot ? '（快照）' : ''}`));
+el.title = q.prior != null ? `漲跌對前一個 RTH 收盤 ${num(q.prior)}` : '沒有前一個收盤';
+}
+function renderBar(el, r, { hovered = false } = {}) {
+el.innerHTML = '';
+if (!r) return;
+const when = `${r.date.slice(5)}${r.time ? ` ${r.time}` : ''}`;
+el.append(span('tag', `${hovered ? '▸ ' : ''}${r.tf}${r.n ? ` #${r.n}` : ''} ${when}`),
+span('kv', `開 ${num(r.o)}`), span('kv', `高 ${num(r.h)}`), span('kv', `低 ${num(r.l)}`), span('kv', `收 ${num(r.c)}`),
+span(`chg ${tone(r.chg)}`, `${signed(r.chg)} (${signed(r.pct)}%)`), span('kv', `幅 ${num(r.range)}`), span('kv', `量 ${fmtVol(r.v)}`));
+}
+const READOUT_CSS = `
+.ro-q,.ro-b{display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;font-size:11px;line-height:1.45;font-variant-numeric:tabular-nums;min-width:0}
+.ro-q .sym{font-weight:700}.ro-q .px{font-weight:700;font-size:13px}
+.ro-q .asof,.ro-b .tag{color:var(--muted-foreground,#787b86)}
+.ro-q .up,.ro-b .up{color:#26a69a}.ro-q .dn,.ro-b .dn{color:#ef5350}
+.ro-q span,.ro-b span{white-space:nowrap}
+.ro-b{min-height:16px}`;
+return { fmtVol, quoteOf, barOf, renderQuote, renderBar, READOUT_CSS };
+})();
 __M['card/shell.js'] = (() => {
 const { registerAll, createCanvasChart } = __M['public/core/chart.js'];
 const { T } = __M['public/core/theme.js'];
@@ -2213,6 +2297,7 @@ const { leaves, shown } = __M['public/core/layers.js'];
 const { barNumbers } = __M['public/core/time.js'];
 const { unpackRows } = __M['public/core/wire.js'];
 const { COMPUTE } = __M['card/indicators.js'];
+const { quoteOf, barOf, renderQuote, renderBar, READOUT_CSS } = __M['public/core/readout.js'];
 const KLINE = 'https://cdn.jsdelivr.net/npm/klinecharts@10.1.0/dist/umd/klinecharts.min.js';
 const GROUPS = [
 { id: 'indicators', label: '指標', re: /^indicators\// }, { id: 'human', label: 'human', re: /^human\// },
@@ -2373,7 +2458,7 @@ let cfg = null;
 let prev = script?.previousElementSibling;
 while (prev && !(prev.tagName === 'SCRIPT' && prev.type === 'text/kcard')) prev = prev.previousElementSibling;
 try { cfg = JSON.parse((prev || document.querySelector('script[type="text/kcard"]'))?.textContent || 'null'); } catch { cfg = null; }
-if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS; document.head.appendChild(st); }
+if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS + READOUT_CSS; document.head.appendChild(st); }
 const root = el('div', `kc${cfg?.r ? ' kc-rep' : ''}`); // p1.54: a report card reserves room for its panel
 if (script && document.body?.contains(script)) script.parentNode.insertBefore(root, script.nextSibling);
 else if (document.body) document.body.appendChild(root);
@@ -2400,7 +2485,8 @@ linesBox.append(linesSum, linesList);
 const noteEl = el('textarea', 'kc-note'); noteEl.rows = 1; noteEl.placeholder = '備註（一則，送出時一起帶給 agent）';
 const bottom = el('div', 'kc-row'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
 const reportEl = data.report ? renderReport(data.report, data.panes) : null;
-root.append(tabsRow, head, tools, linesBox, missEl, chartEl, ...(reportEl ? [reportEl] : []), noteEl, bottom, msg, foot);
+const quoteEl = el('div', 'ro-q'), barEl = el('div', 'ro-b');
+root.append(tabsRow, head, tools, linesBox, missEl, quoteEl, barEl, chartEl, ...(reportEl ? [reportEl] : []), noteEl, bottom, msg, foot);
 const say = (t, err) => { msg.textContent = t || ''; msg.classList.toggle('err', !!err); };
 foot.append(el('span', null, data.title), el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
 const shared = data.drawings.map((d) => ({ ...d, anchors: d.anchors.map((a) => ({ ...a })) }));
@@ -2416,16 +2502,30 @@ else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length
 const hidden = new Set();
 if (p.focus === 'temp' || (p.focus == null && p.latest === false)) for (const d of shared) hidden.add(d.id);
 else if (Array.isArray(p.focus)) for (const d of shared) if (!p.focus.includes(d.id)) hidden.add(d.id);
-return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, pa: Array.isArray(p.pa) ? p.pa : null, bars, rows, nums: barNumbers(bars, p.tf),
+return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, pa: Array.isArray(p.pa) ? p.pa : null, all, warm: p.warm, bars, rows, nums: barNumbers(bars, p.tf), pin: null,
 temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new Set(), selection: null };
 });
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
 registerAll(k, data.metas);
 const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
+view.onBarHover = (i) => showBar(i, i != null);
+chartEl.addEventListener('pointerup', (e) => {
+if (e.pointerType !== 'touch' || mode) return;
+const i = barIndex(e);
+if (i == null) return;
+const p = P(); p.pin = p.pin === i ? null : i; showBar(null);
+});
 const offGroups = { subs: !!data.report };
 const subNames = new Set(data.metas.filter((m) => m.pane !== 'main').map((m) => `indicators/${m.name}`));
 let cur = 0, mode = null, locked = false, sent = null, selLine = null, draftSeq = 0;
 const P = () => panes[cur];
+const showBar = (i, hovered) => {
+const p = P();
+const k = i ?? p.pin ?? p.bars.length - 1;
+renderBar(barEl, barOf(p.all, k + p.warm, p.tf, p.nums[k]?.n), { hovered: hovered || (i == null && p.pin != null) });
+root.dataset.bar = String(k);
+};
+const showQuote = () => renderQuote(quoteEl, quoteOf(P().all, P().tf), { symbol: data.symbol, snapshot: true });
 const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]), pick = P().pa;
 return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/')
@@ -2495,6 +2595,7 @@ cur = i; selLine = null; setMode(null);
 const p = P();
 view.setBars(data.symbol, p.tf, p.bars);
 view.setRows(p.rows);
+showQuote(); showBar(null);
 refresh();
 view.chart.setBarSpace(Math.max(3, (chartEl.clientWidth - 80) / Math.max(20, p.bars.length + 2)));
 view.chart.scrollToRealTime();
