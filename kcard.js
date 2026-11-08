@@ -445,7 +445,7 @@ __M['public/core/drawings.js'] = (() => {
 const { barIndexAt, PERIODS } = __M['public/core/time.js'];
 const { T } = __M['public/core/theme.js'];
 const DRAW_KINDS = { trend_line: 2, horizontal_line: 1, parallel_channel: 3, marker: 1, zone: 2, bar_span: 2 };
-const TAG = (d) => (d.temp ? '暫時' : d.card_draft ? '草稿' : null);
+const TAG = (d) => (d.pending_delete ? '待刪' : d.temp ? '暫時' : d.card_draft ? '草稿' : null);
 const MARKER_TYPES = ['buy', 'sell', 'plan', 'event'];
 const toMs = (a) => (a?.ts != null ? Number(a.ts) : Date.parse(a?.time));
 function logicalAt(data, tf, ms) {
@@ -479,6 +479,8 @@ if (pts.some((p) => p.x == null || !Number.isFinite(p.y))) continue;
 const col = colorOf(d);
 const sel = c.selectedDrawing === d.id || d.draft;
 const hit = { id: d.id, segs: [], pts: pts.map((p, i) => ({ x: p.x, y: p.y, i })), rect: null };
+const ALPHA = d.pending_delete ? 0.35 : 1;
+ctx.globalAlpha = ALPHA;
 ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = sel ? 2 : 1.5; ctx.setLineDash(d.draft || TAG(d) ? [4, 3] : []);
 const line = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); hit.segs.push([x1, y1, x2, y2]); };
 let labelAt = pts[0], mtText = null;
@@ -490,7 +492,7 @@ line(0, pts[0].y, W, pts[0].y);
 labelAt = { x: W - 8, y: pts[0].y, right: true };
 } else if (d.kind === 'parallel_channel' && pts.length >= 2) {
 const [A, B] = pts;
-if (Math.abs(B.x - A.x) < 1e-6) { ctx.restore(); continue; }
+if (Math.abs(B.x - A.x) < 1e-6) continue;
 const lA = logicalAt(data, c.tf, toMs(d.anchors[0])), lB = logicalAt(data, c.tf, toMs(d.anchors[1]));
 let off = 0;
 if (d.anchors[2]) {
@@ -499,9 +501,9 @@ off = d.anchors[2].price - (A.price + ((B.price - A.price) * (lC - lA)) / (lB - 
 }
 const levels = Array.isArray(d.levels) && d.levels.length && d.levels.length <= 16 && d.levels.every((k) => Number.isFinite(k) && Math.abs(k) <= 100) ? d.levels : [0, 1];
 if (d.anchors[2]) {
-ctx.globalAlpha = 0.08; ctx.beginPath();
+ctx.globalAlpha = 0.08 * ALPHA; ctx.beginPath();
 ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.lineTo(B.x, Y(B.price + off)); ctx.lineTo(A.x, Y(A.price + off)); ctx.closePath(); ctx.fill();
-ctx.globalAlpha = 1;
+ctx.globalAlpha = ALPHA;
 }
 for (const k of levels) {
 ctx.setLineDash(k === 0 || k === 1 ? (d.draft ? [4, 3] : []) : [4, 4]);
@@ -512,18 +514,18 @@ labelAt = B;
 } else if (d.kind === 'bar_span' && pts.length >= 2) {
 const half = Math.max(2, Math.abs(xAxis.convertToPixel(1) - xAxis.convertToPixel(0)) / 2);
 const x0 = Math.min(pts[0].x, pts[1].x) - half, x1 = Math.max(pts[0].x, pts[1].x) + half;
-ctx.globalAlpha = 0.14; ctx.fillRect(x0, 0, x1 - x0, bounding.height); ctx.globalAlpha = 1;
+ctx.globalAlpha = 0.14 * ALPHA; ctx.fillRect(x0, 0, x1 - x0, bounding.height); ctx.globalAlpha = ALPHA;
 hit.rect = { x0, x1, y0: 0, y1: bounding.height };
 labelAt = { x: x0 + 2, y: 14 };
 } else if (d.kind === 'zone' && pts.length >= 2) {
 const x0 = Math.min(pts[0].x, pts[1].x), x1 = Math.max(pts[0].x, pts[1].x), y0 = Math.min(pts[0].y, pts[1].y), y1 = Math.max(pts[0].y, pts[1].y);
-ctx.globalAlpha = 0.12; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.globalAlpha = 1;
+ctx.globalAlpha = 0.12 * ALPHA; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.globalAlpha = ALPHA;
 ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
 hit.rect = { x0, x1, y0, y1 };
 labelAt = { x: x0 + 2, y: y0 - 2, above: true };
 } else if (d.kind === 'marker') {
 const mt = markerTypeOf(d);
-if (!MARKER_TYPES.includes(mt)) { ctx.restore(); continue; }
+if (!MARKER_TYPES.includes(mt)) continue;
 const { x, y } = pts[0], r = 7;
 ctx.beginPath();
 if (mt === 'buy') { ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * 0.7); ctx.lineTo(x - r, y + r * 0.7); }
@@ -543,10 +545,11 @@ ctx.font = '11px sans-serif'; ctx.textBaseline = labelAt.above ? 'bottom' : 'mid
 ctx.textAlign = labelAt.right ? 'right' : 'left';
 const tw = ctx.measureText(text).width;
 const tx = labelAt.right ? labelAt.x - tw : labelAt.x + 4, ty = labelAt.above ? labelAt.y - 6 : labelAt.y - 9;
-ctx.globalAlpha = 0.75; ctx.fillStyle = T.panel; ctx.fillRect(tx - 3, ty - 1, tw + 6, 15); ctx.globalAlpha = 1;
+ctx.globalAlpha = 0.75 * ALPHA; ctx.fillStyle = T.panel; ctx.fillRect(tx - 3, ty - 1, tw + 6, 15); ctx.globalAlpha = ALPHA;
 ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, tx, ty + 6.5);
 }
 if (sel) for (const p of hit.pts) { ctx.fillStyle = T.bg; ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+ctx.globalAlpha = 1;
 c.drawHits.push(hit);
 }
 ctx.restore();
@@ -2122,7 +2125,7 @@ const GROUPS = [
 ];
 const TOOLS = [['select', '▤ 選 bar', '點一根 bar，或按住拖一段範圍'], ['trend_line', '╱ 趨勢線', '草稿：點 2 下'], ['horizontal_line', '─ 水平線', '草稿：點 1 下']];
 const CSS = `
-.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:640px}
+.kc{font:12px/1.4 var(--font-sans,ui-sans-serif,system-ui,sans-serif);color:var(--foreground,#d1d4dc);min-height:680px}
 .kc *{box-sizing:border-box}
 .kc-row{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-bottom:6px}
 .kc-title{color:var(--muted-foreground,#787b86);margin-right:2px}
@@ -2133,6 +2136,14 @@ const CSS = `
 .kc-chart{position:relative;width:100%;height:460px;border:1px solid var(--border,#2a2e39);border-radius:6px;overflow:hidden}
 .kc-note{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--border,#2a2e39);border-radius:4px;padding:4px 6px;resize:vertical;min-height:30px}
 .kc-btn:disabled{opacity:.45;cursor:default}
+.kc-lines{margin:0 0 6px;font-size:11px}
+.kc-lines summary{cursor:pointer;color:var(--muted-foreground,#787b86);user-select:none}
+.kc-list{max-height:120px;overflow:auto;border:1px solid var(--border,#2a2e39);border-radius:4px;padding:2px 4px;margin-top:4px}
+.kc-grp{color:var(--muted-foreground,#787b86);margin-top:2px}
+.kc-li{display:flex;gap:6px;align-items:center;min-width:0}
+.kc-li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.kc-li.sel .nm{text-decoration:underline}.kc-li.del .nm{text-decoration:line-through;opacity:.6}
+.kc-eye{font:inherit;border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;width:20px}
 .kc-send{font-weight:600}
 .kc-msg{color:var(--muted-foreground,#787b86);font-size:11px;min-height:15px}
 .kc-msg.err{color:var(--destructive,#ef5350)}
@@ -2141,7 +2152,7 @@ const CSS = `
 .kc .tc-cursor-pointer,.kc .tc-cursor-pointer *{cursor:pointer!important}
 .kc .tc-cursor-grab,.kc .tc-cursor-grab *{cursor:grab!important}
 .kc .tc-cursor-grabbing,.kc .tc-cursor-grabbing *{cursor:grabbing!important}
-@media (max-width:480px){.kc{min-height:620px}.kc-chart{height:380px}}`;
+@media (max-width:480px){.kc{min-height:700px}.kc-chart{height:380px}}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
 window.__kcardKline ||= new Promise((ok, fail) => {
@@ -2193,15 +2204,21 @@ try { [data, k] = await Promise.all([api(`/api/card/${encodeURIComponent(cfg.id)
 applyTheme();
 root.innerHTML = '';
 const head = el('div', 'kc-row'), tools = el('div', 'kc-row'), chartEl = el('div', 'kc-chart');
+const linesBox = el('details', 'kc-lines'), linesSum = el('summary'), linesList = el('div', 'kc-list');
+linesBox.append(linesSum, linesList);
 const noteEl = el('textarea', 'kc-note'); noteEl.rows = 1; noteEl.placeholder = '備註（一則，送出時一起帶給 agent）';
 const bottom = el('div', 'kc-row'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
-root.append(head, tools, chartEl, noteEl, bottom, msg, foot);
+root.append(head, tools, linesBox, chartEl, noteEl, bottom, msg, foot);
 const say = (t, err) => { msg.textContent = t || ''; msg.classList.toggle('err', !!err); };
 foot.append(el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
 const shared = data.drawings.map((d) => ({ ...d, anchors: d.anchors.map((a) => ({ ...a })) }));
 const temp = data.temp_drawings || [];
 const drafts = [];
 let selection = null; // { tf, i0, i1 } over the current pane's bars
+const hidden = new Set(), pendingDel = new Set();
+let selLine = null;
+if (data.focus === 'temp') for (const d of shared) hidden.add(d.id);
+else if (Array.isArray(data.focus)) for (const d of shared) if (!data.focus.includes(d.id)) hidden.add(d.id);
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
 registerAll(k, data.metas);
 const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
@@ -2221,11 +2238,47 @@ return [{ id: 'sel', kind: 'bar_span', path: 'card/sel/1', created_by: { kind: '
 label: selection.i0 === selection.i1 ? `#${n[selection.i0]?.n ?? '?'}` : `#${n[selection.i0]?.n ?? '?'}–#${n[selection.i1]?.n ?? '?'}`,
 anchors: [{ ts: a.timestamp, price: 0 }, { ts: b.timestamp, price: 0 }] }];
 };
+const kindOf = (d) => d.kind === 'trend_line' ? '趨勢線' : d.kind === 'horizontal_line' ? '水平線' : d.kind === 'parallel_channel' ? '通道' : d.kind === 'marker' ? '標記' : d.kind === 'zone' ? '區間' : d.kind;
+const groupOfLine = (id) => (temp.some((d) => d.id === id) ? 'temp' : drafts.some((d) => d.id === id) ? 'draft' : 'shared');
 const refresh = () => {
-state.drawings = [...shared, ...temp, ...drafts, ...selBand()];
+const lines = [...shared.map((d) => (pendingDel.has(d.id) ? { ...d, pending_delete: true } : d)), ...temp, ...drafts].filter((d) => !hidden.has(d.id));
+state.drawings = [...lines, ...selBand()];
 view.apply(state, visible(), {});
-root.dataset.drafts = drafts.length; root.dataset.selection = selection ? `${selection.tf}:${selection.i0}-${selection.i1}` : '';
+if (selLine && hidden.has(selLine)) { selLine = null; view.selectDrawing(null); }
+Object.assign(root.dataset, { drafts: drafts.length, selection: selection ? `${selection.tf}:${selection.i0}-${selection.i1}` : '',
+hidden: hidden.size, deletes: pendingDel.size, line: selLine || '', ready: '1' });
+renderLines();
 };
+function renderLines() {
+const all = [['暫時（agent）', temp], ['草稿', drafts], ['共用', shared]];
+const n = temp.length + drafts.length + shared.length;
+linesSum.textContent = `線 ${n} 條${hidden.size ? `（隱藏 ${hidden.size}）` : ''}${pendingDel.size ? ` · 待刪 ${pendingDel.size}` : ''}`;
+linesList.innerHTML = '';
+for (const [name, list] of all) {
+if (!list.length) continue;
+linesList.appendChild(el('div', 'kc-grp', name));
+for (const d of list) {
+const row = el('div', `kc-li${selLine === d.id ? ' sel' : ''}${pendingDel.has(d.id) ? ' del' : ''}`);
+const eye = el('button', 'kc-eye', hidden.has(d.id) ? '◌' : '●'); eye.title = hidden.has(d.id) ? '顯示' : '隱藏';
+eye.onclick = () => { if (hidden.has(d.id)) hidden.delete(d.id); else hidden.add(d.id); refresh(); };
+const who = d.created_by?.kind === 'agent' ? ` · ${d.created_by.name}` : '';
+const nm = el('span', 'nm', `${kindOf(d)}${d.label ? `「${d.label}」` : ''}${who}`); nm.title = d.id;
+nm.onclick = () => { if (hidden.has(d.id)) return; selLine = d.id; view.selectDrawing(d.id); refresh(); renderTools(); };
+row.append(eye, nm);
+if (pendingDel.has(d.id) && !locked) { const undo = el('button', 'kc-eye', '↺'); undo.title = '復原'; undo.style.width = 'auto'; undo.onclick = () => { pendingDel.delete(d.id); refresh(); renderTools(); }; row.appendChild(undo); }
+linesList.appendChild(row);
+}
+}
+}
+function deleteSelected() {
+if (locked || !selLine) return;
+const g = groupOfLine(selLine);
+if (g === 'temp') return say('agent 的暫時線不能刪，可以在「線」清單裡隱藏。', true);
+if (g === 'draft') { drafts.splice(drafts.findIndex((d) => d.id === selLine), 1); selLine = null; say(''); }
+else if (pendingDel.has(selLine)) { pendingDel.delete(selLine); say('已復原'); }
+else { pendingDel.add(selLine); say('已標成待刪：送出後由 agent 確認才會真的刪。'); }
+refresh(); renderTools();
+}
 const panes = data.panes.map((p) => {
 const all = p.bars.map((b) => ({ timestamp: b[0], open: b[1], high: b[2], low: b[3], close: b[4], volume: b[5] }));
 const bars = all.slice(p.warm);
@@ -2273,10 +2326,14 @@ b.onclick = () => setMode(mode === m ? null : m); tools.appendChild(b);
 }
 tools.appendChild(el('span', 'kc-sep'));
 const undo = el('button', 'kc-btn', '刪掉上一條'); undo.disabled = locked || !drafts.length; undo.onclick = () => { drafts.pop(); refresh(); renderTools(); };
+const g = selLine && groupOfLine(selLine);
+const del = el('button', 'kc-btn', g === 'shared' && pendingDel.has(selLine) ? '復原這條' : '刪掉這條');
+del.disabled = locked || !selLine || g === 'temp'; del.title = g === 'temp' ? 'agent 的暫時線只能隱藏' : 'Delete 鍵也可以';
+del.onclick = deleteSelected;
 const clr = el('button', 'kc-btn', '清除選取'); clr.disabled = locked || !selection; clr.onclick = () => { selection = null; refresh(); renderTools(); };
-tools.append(undo, clr);
+tools.append(undo, del, clr);
 bottom.innerHTML = '';
-const summary = el('span', 'kc-title', `選取 ${selection ? 1 : 0} · 草稿 ${drafts.length} 條${temp.length ? ` · agent 暫時線 ${temp.length}` : ''}`);
+const summary = el('span', 'kc-title', `選取 ${selection ? 1 : 0} · 草稿 ${drafts.length} 條${pendingDel.size ? ` · 待刪 ${pendingDel.size}` : ''}${temp.length ? ` · agent 暫時線 ${temp.length}` : ''}`);
 const send = el('button', 'kc-btn on kc-send', sent ? `已送出 ${sent.sub_id}` : '送出'); send.disabled = locked;
 send.onclick = submit;
 bottom.append(summary, send);
@@ -2309,8 +2366,12 @@ const mv = (ev) => { const i = barIndex(ev); if (i == null) return; selection = 
 const up = () => { document.removeEventListener('mousemove', mv, true); document.removeEventListener('mouseup', up, true); renderTools(); };
 document.addEventListener('mousemove', mv, true); document.addEventListener('mouseup', up, true);
 }, true);
+view.onDrawingSelect = (id) => { selLine = id === 'sel' ? null : id; refresh(); renderTools(); };
 root.tabIndex = -1;
-root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && mode) setMode(null); });
+root.addEventListener('keydown', (e) => {
+if (e.key === 'Escape' && mode) setMode(null);
+if ((e.key === 'Delete' || e.key === 'Backspace') && selLine && !/^(TEXTAREA|INPUT)$/.test(e.target.tagName)) { e.preventDefault(); deleteSelected(); }
+});
 const selectionsOut = () => {
 if (!selection) return [];
 const n = numsOf(selection.tf), out = [];
@@ -2333,8 +2394,9 @@ renderTools();
 async function submit() {
 if (locked) return;
 const body = { base_revision: data.base_revision, selections: selectionsOut(), note: noteEl.value.trim(),
+deletes: [...pendingDel].map((id) => ({ drawing_id: id, revision: data.base_revision })),
 drawings: drafts.map((d) => ({ kind: d.kind, tf: d.tf, anchors: d.anchors.map((a) => ({ ts: a.ts ?? Date.parse(a.time), price: a.price })) })) };
-if (!body.selections.length && !body.drawings.length && !body.note) return say('還沒有東西可以送：選 bar、畫草稿，或寫備註。', true);
+if (!body.selections.length && !body.drawings.length && !body.deletes.length && !body.note) return say('還沒有東西可以送：選 bar、畫草稿、標待刪，或寫備註。', true);
 say('送出中…');
 try {
 const r = await api(`/api/card/${encodeURIComponent(cfg.id)}/submit`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(body) });
@@ -2343,6 +2405,7 @@ root.dataset.sub = r.sub_id;
 if (cfg.hook) await postHook(sent);
 else { locked = true; setMode(null); say(`已存紀錄 ${r.sub_id}（這張卡沒有 hook：agent 要從 /api/ai/submissions 讀）。卡片已鎖定。`); renderTools(); }
 noteEl.disabled = locked;
+renderLines();
 } catch (e) { say(`送出失敗：${e.message}。草稿保留。`, true); }
 }
 renderTools();
