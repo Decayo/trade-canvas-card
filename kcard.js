@@ -2236,30 +2236,40 @@ const daily = (tf) => (PERIODS[tf]?.min || 0) >= 1440 || !!PERIODS[tf]?.months;
 const num = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toFixed(d));
 const fmtVol = (v) => (v == null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(Math.round(v)));
 const signed = (v, d = 2) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}`);
-function quoteOf(all, tf) {
+function priorClose(closes, day, fallback) {
+const keys = Object.keys(closes || {}).filter((d) => d < day).sort();
+if (keys.length) return { prior: closes[keys.at(-1)], est: false, priorDay: keys.at(-1) };
+return { prior: fallback ?? null, est: fallback != null, priorDay: null };
+}
+function quoteOf(all, tf, closes) {
 if (!all?.length) return null;
 const last = all.at(-1);
+const day = etParts(last.timestamp).dateKey;
 if (daily(tf)) {
 const prev = all.at(-2);
-return { last: last.close, prior: prev?.close ?? null, o: last.open, h: last.high, l: last.low, v: last.volume, asOf: last.timestamp, daily: true, day: etParts(last.timestamp).dateKey };
+return { last: last.close, ...priorClose(closes, day, prev?.close), o: last.open, h: last.high, l: last.low, v: last.volume, asOf: last.timestamp, daily: true, day };
 }
-const day = etParts(last.timestamp).dateKey;
 let k = all.length - 1;
 while (k > 0 && etParts(all[k - 1].timestamp).dateKey === day) k--;
 const sess = all.slice(k);
 const per = PERIODS[tf];
 return {
-last: last.close, prior: k > 0 ? all[k - 1].close : null, o: sess[0].open, h: Math.max(...sess.map((b) => b.high)), l: Math.min(...sess.map((b) => b.low)),
+last: last.close, ...priorClose(closes, day, k > 0 ? all[k - 1].close : null), o: sess[0].open, h: Math.max(...sess.map((b) => b.high)), l: Math.min(...sess.map((b) => b.low)),
 v: sess.reduce((s, b) => s + (b.volume || 0), 0), asOf: last.close_ts ?? last.timestamp + (per?.min || 0) * 60000, day,
 };
 }
-function barOf(all, i, tf, n) {
+function barOf(all, i, tf, n, closes) {
 const b = all[i];
 if (!b) return null;
 const prev = all[i - 1];
 const e = etParts(b.timestamp);
+let ref = prev?.close ?? null, est = false;
+if (prev && (daily(tf) || etParts(prev.timestamp).dateKey !== e.dateKey)) {
+const p = priorClose(closes, e.dateKey, prev.close);
+ref = p.prior; est = p.est;
+}
 return { tf, n: n ?? null, date: e.dateKey, time: daily(tf) ? null : e.hhmm, weekday: e.weekday, o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume,
-chg: prev ? b.close - prev.close : null, pct: prev ? ((b.close - prev.close) / prev.close) * 100 : null, range: b.high - b.low };
+chg: ref != null ? b.close - ref : null, pct: ref ? ((b.close - ref) / ref) * 100 : null, est, range: b.high - b.low };
 }
 const span = (cls, text) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
 const tone = (v) => (v > 0 ? 'up' : v < 0 ? 'dn' : '');
@@ -2269,9 +2279,10 @@ if (!q) return;
 const chg = q.prior != null ? q.last - q.prior : null, pct = q.prior ? (chg / q.prior) * 100 : null;
 const e = etParts(q.asOf);
 el.append(span('sym', symbol || ''), span('px', num(q.last)), span(`chg ${tone(chg)}`, `${signed(chg)} (${signed(pct)}%)`),
+span(q.est ? 'kv est' : 'kv', `${q.est ? '前收（估）' : '前收'} ${num(q.prior)}`),
 span('kv', `開 ${num(q.o)}`), span('kv', `高 ${num(q.h)}`), span('kv', `低 ${num(q.l)}`), span('kv', `量 ${fmtVol(q.v)}`),
 span('asof', `${snapshot ? '截至' : '最新'} ${e.dateKey.slice(5)} ${q.daily ? '收盤' : `${e.hhmm} ET`}${snapshot ? '（快照）' : ''}`));
-el.title = q.prior != null ? `漲跌對前一個 RTH 收盤 ${num(q.prior)}` : '沒有前一個收盤';
+el.title = q.prior == null ? '沒有前一個收盤' : q.est ? `沒有前一天的日線收盤，用前一天最後一根的收盤 ${num(q.prior)}` : `漲跌對 ${q.priorDay} 的日線收盤 ${num(q.prior)}`;
 }
 function renderBar(el, r, { hovered = false } = {}) {
 el.innerHTML = '';
@@ -2279,7 +2290,7 @@ if (!r) return;
 const when = `${r.date.slice(5)}${r.time ? ` ${r.time}` : ''}`;
 el.append(span('tag', `${hovered ? '▸ ' : ''}${r.tf}${r.n ? ` #${r.n}` : ''} ${when}`),
 span('kv', `開 ${num(r.o)}`), span('kv', `高 ${num(r.h)}`), span('kv', `低 ${num(r.l)}`), span('kv', `收 ${num(r.c)}`),
-span(`chg ${tone(r.chg)}`, `${signed(r.chg)} (${signed(r.pct)}%)`), span('kv', `幅 ${num(r.range)}`), span('kv', `量 ${fmtVol(r.v)}`));
+span(`chg ${tone(r.chg)}`, `${signed(r.chg)} (${signed(r.pct)}%)${r.est ? '（估）' : ''}`), span('kv', `幅 ${num(r.range)}`), span('kv', `量 ${fmtVol(r.v)}`));
 }
 const READOUT_CSS = `
 .ro-q,.ro-b{display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;font-size:11px;line-height:1.45;font-variant-numeric:tabular-nums;min-width:0}
@@ -2287,6 +2298,7 @@ const READOUT_CSS = `
 .ro-q .asof,.ro-b .tag{color:var(--muted-foreground,#787b86)}
 .ro-q .up,.ro-b .up{color:#26a69a}.ro-q .dn,.ro-b .dn{color:#ef5350}
 .ro-q span,.ro-b span{white-space:nowrap}
+.ro-q .est{color:#f2c94c}
 .ro-b{min-height:16px}`;
 return { fmtVol, quoteOf, barOf, renderQuote, renderBar, READOUT_CSS };
 })();
@@ -2522,10 +2534,10 @@ const P = () => panes[cur];
 const showBar = (i, hovered) => {
 const p = P();
 const k = i ?? p.pin ?? p.bars.length - 1;
-renderBar(barEl, barOf(p.all, k + p.warm, p.tf, p.nums[k]?.n), { hovered: hovered || (i == null && p.pin != null) });
+renderBar(barEl, barOf(p.all, k + p.warm, p.tf, p.nums[k]?.n, data.daily_closes), { hovered: hovered || (i == null && p.pin != null) });
 root.dataset.bar = String(k);
 };
-const showQuote = () => renderQuote(quoteEl, quoteOf(P().all, P().tf), { symbol: data.symbol, snapshot: true });
+const showQuote = () => renderQuote(quoteEl, quoteOf(P().all, P().tf, data.daily_closes), { symbol: data.symbol, snapshot: true });
 const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]), pick = P().pa;
 return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/')
