@@ -1033,7 +1033,7 @@ const side = f.side === 'buy' ? '買' : f.side === 'sell' ? '賣' : f.side;
 add(f.ts, { kind: 'fill', side: f.side, author: f.author, agent: f.path.startsWith('agent/') ? f.path.split('/')[1] : null,
 title: f.text, body: `${side} ${f.qty ?? ''} ${f.contract ?? ''}`.replace(/\s+/g, ' ').trim(), ts: f.ts, price: f.price, path: f.path });
 }
-for (const r of c.reports || []) add(r.as_of_ts, { kind: 'report', author: 'agent', agent: 'report', title: r.title, body: r.bull != null ? `多 ${r.bull}% / 空 ${r.bear}%（偏向，不是勝率）` : '', ts: r.as_of_ts, path: r.path, reportId: r.id });
+for (const r of c.reports || []) add(r.as_of_ts, { kind: 'report', author: 'agent', agent: 'report', title: r.title, body: r.bull != null ? `多 ${r.bull}% / 空 ${r.bear}%（偏向，不是勝率）` : '', ts: r.as_of_ts, path: r.path, reportId: r.id, tf: r.tf, bull: r.bull, bear: r.bear, created_at: r.created_at });
 for (const s of c.signals) for (const t of s.triggers || []) add(t.ts, { kind: 'signal', author: s.author, agent: s.agent, title: s.name, body: t.note || '', ts: t.ts, price: t.price, path: s.path });
 return by;
 }
