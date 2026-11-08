@@ -2227,9 +2227,9 @@ if (COMPUTE[m.name]) { try { rows[m.name] = COMPUTE[m.name](all).slice(p.warm); 
 else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length);
 }
 const hidden = new Set();
-if (p.focus === 'temp') for (const d of shared) hidden.add(d.id);
+if (p.focus === 'temp' || (p.focus == null && p.latest === false)) for (const d of shared) hidden.add(d.id);
 else if (Array.isArray(p.focus)) for (const d of shared) if (!p.focus.includes(d.id)) hidden.add(d.id);
-return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, bars, rows, nums: barNumbers(bars, p.tf),
+return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, bars, rows, nums: barNumbers(bars, p.tf),
 temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new Set(), selection: null };
 });
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
@@ -2265,7 +2265,8 @@ view.apply(state, visible(), {});
 if (selLine && (p.hidden.has(selLine) || ![...shared, ...p.temp, ...p.drafts].some((d) => d.id === selLine))) { selLine = null; view.selectDrawing(null); }
 const t = totals();
 Object.assign(root.dataset, { pane: p.id, drafts: t.drafts, selection: t.selections, hidden: p.hidden.size, deletes: t.deletes, line: selLine || '', ready: '1' });
-missEl.textContent = p.missing ? `這個分頁的資料不完整：要 ${p.missing.asked}，cache 裡只有 ${p.missing.have || '（沒有）'}。沒有觸發下載。` : '';
+const dl = p.ensure ? { completed: '下載完成但仍有缺口', queued: '下載中（排隊）', running: '下載中', failed: `下載失敗${p.ensure.error ? `：${p.ensure.error}` : ''}`, busy: 'KbarCanvasService 忙，稍後再開一張卡' }[p.ensure.state] || `下載狀態 ${p.ensure.state}` : '沒有觸發下載';
+missEl.textContent = p.missing ? `這個分頁的資料不完整：要 ${p.missing.asked}，cache 裡只有 ${p.missing.have || '（沒有）'}。${dl}${p.ensure?.job ? `（job ${p.ensure.job}）` : ''}。` : p.ensure ? `已向 KbarCanvasService 補資料（${p.ensure.state}${p.ensure.rows != null ? `，${p.ensure.rows} 根` : ''}）。` : '';
 renderLines();
 };
 function renderLines() {
