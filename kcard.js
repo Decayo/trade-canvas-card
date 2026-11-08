@@ -1,4 +1,4 @@
-/*! kcard — trade-canvas T3 card shell. Built from 21 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, indicators/pa.js, card/indicators.js, card/shell.js */
+/*! kcard — trade-canvas T3 card shell. Built from 20 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, card/shell.js */
 (function () {
 window.__kcardScript = document.currentScript;
 var __M = {};
@@ -655,46 +655,79 @@ ctx.beginPath(); ctx.moveTo(x0 + 0.5, Math.min(y0, y1)); ctx.lineTo(x0 + 0.5, Ma
 ctx.restore();
 return true;
 }
-function drawPa({ ctx, chart, indicator, xAxis, yAxis }) {
+function drawPa({ ctx, chart, indicator, xAxis, yAxis, bounding }) {
 const c = CTX.get(chart.id);
 const pa = indicator.result.at(-1)?.pa;
 if (!pa || !c?.paShow) return true;
+const show = c.paShow;
 const data = chart.getDataList();
 const { from, to } = chart.getVisibleRange();
-const idx = (ts) => { const i = barIndexAt(data, ts); return i >= 0 && data[i].timestamp === ts ? i : null; };
+const idx = (ts) => { if (ts == null) return null; const i = barIndexAt(data, ts); return i >= 0 && data[i].timestamp === ts ? i : null; };
 const X = (i) => xAxis.convertToPixel(i), Y = (p) => yAxis.convertToPixel(p);
-const half = chart.getBarSpace().halfBar;
+const half = chart.getBarSpace().halfBar, W = bounding.width;
+const label = (text, x, y, col, align = 'left', base = 'bottom') => {
+ctx.font = '600 10px sans-serif'; ctx.textAlign = align; ctx.textBaseline = base;
+const w = ctx.measureText(text).width, bx = align === 'right' ? x - w - 3 : x - 1, by = base === 'bottom' ? y - 13 : y;
+ctx.fillStyle = 'rgba(19,23,34,0.72)'; ctx.fillRect(bx, by, w + 4, 13);
+ctx.fillStyle = col; ctx.fillText(text, align === 'right' ? x - 1 : x + 1, base === 'bottom' ? y - 1 : y + 1);
+};
+const fmt = (v) => Number(v).toFixed(2);
 ctx.save();
-if (c.paShow.range) for (const r of pa.ranges || []) {
-const i0 = idx(r.from_ts), i1 = idx(r.to_ts);
+if (show.zones) for (const z of pa.zones || []) {
+const y0 = Y(z.hi), y1 = Y(z.lo), h = Math.max(3, y1 - y0);
+const a = Math.min(0.22, 0.05 + 0.03 * z.score);
+ctx.fillStyle = `rgba(171,71,188,${a})`; ctx.fillRect(0, y0 - (h === 3 ? 1 : 0), W, h);
+label(`共振 ${z.score} · ${z.sources[0] || ''}${z.sources.length > 1 ? ` +${z.sources.length - 1}` : ''}`, W - 64, y0, 'rgba(206,147,216,0.95)', 'right');
+}
+if (show.ranges) for (const r of pa.ranges || []) {
+const i0 = idx(r.from_ts), i1 = r.status === 'active' || r.status.endsWith('pending') ? data.length - 1 : idx(r.to_ts);
 if (i0 == null || i1 == null || i1 < from || i0 > to) continue;
-const x0 = X(i0) - half, x1 = X(i1) + half, y0 = Y(r.top), y1 = Y(r.bottom);
-ctx.fillStyle = 'rgba(242,201,76,0.08)'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-ctx.strokeStyle = 'rgba(242,201,76,0.55)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+const live = r.status === 'active' || r.status.endsWith('pending');
+const x0 = X(i0) - half, x1 = X(i1) + half, y0 = Y(r.upper), y1 = Y(r.lower);
+ctx.fillStyle = live ? 'rgba(242,201,76,0.07)' : 'rgba(242,201,76,0.035)'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+ctx.strokeStyle = live ? 'rgba(242,201,76,0.8)' : 'rgba(242,201,76,0.4)'; ctx.lineWidth = 1;
+for (const y of [y0, y1]) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+ctx.fillStyle = 'rgba(242,201,76,0.9)';
+for (const t of r.upper_test_ts || []) { const i = idx(t); if (i != null) ctx.fillRect(X(i) - 1, y0 - 3, 2, 6); }
+for (const t of r.lower_test_ts || []) { const i = idx(t); if (i != null) ctx.fillRect(X(i) - 1, y1 - 3, 2, 6); }
+const lx = Math.max(x0, 2), col = live ? 'rgba(242,201,76,1)' : 'rgba(242,201,76,0.6)';
+label(`上沿 ${fmt(r.upper)} · ${r.upper_tests}次測試`, lx, y0, col);
+label(`下沿 ${fmt(r.lower)} · ${r.lower_tests}次測試`, lx, y1, col, 'left', 'top');
 }
-if (c.paShow.channel) for (const ch of [pa.channel?.previous, pa.channel?.current]) {
-if (!ch) continue;
+if (show.channels) for (const ch of pa.channels || []) {
 const ia = idx(ch.line[0].ts), ib = idx(ch.line[1].ts);
-if (ia == null || ib == null || ib === ia) continue;
-const slope = (ch.line[1].price - ch.line[0].price) / (ib - ia), off = ch.parallel[0].price - ch.line[0].price;
-const end = ch.current ? data.length - 1 : Math.min(data.length - 1, ib + Math.round((ib - ia) / 2));
-ctx.strokeStyle = ch.current ? 'rgba(225,228,234,0.8)' : 'rgba(225,228,234,0.35)'; ctx.lineWidth = ch.current ? 1.2 : 1;
-ctx.setLineDash(ch.current ? [] : [5, 4]);
-for (const o of [0, off]) { ctx.beginPath(); ctx.moveTo(X(ia), Y(ch.line[0].price + o)); ctx.lineTo(X(end), Y(ch.line[0].price + o + slope * (end - ia))); ctx.stroke(); }
+if (ia == null || ib == null || ib === ia || ib < from) continue;
+const live = ch.status === 'active';
+ctx.strokeStyle = live ? 'rgba(225,228,234,0.85)' : 'rgba(225,228,234,0.4)'; ctx.lineWidth = live ? 1.3 : 1;
+ctx.setLineDash(live ? [] : [5, 4]);
+for (const L of [ch.line, ch.parallel]) { ctx.beginPath(); ctx.moveTo(X(ia), Y(L[0].price)); ctx.lineTo(X(ib), Y(L[1].price)); ctx.stroke(); }
 ctx.setLineDash([]);
+ctx.fillStyle = 'rgba(225,228,234,0.95)';
+ch.touch_ts.forEach((t, k) => { const i = idx(t); if (i == null) return; ctx.beginPath(); ctx.arc(X(i), Y(ch.touch_price[k]), 2.5, 0, Math.PI * 2); ctx.fill(); });
+const name = ch.direction === 'up' ? '上升通道' : ch.direction === 'down' ? '下降通道' : '水平通道';
+const tip = ch.line[1], yy = Y(tip.price);
+label(`${name} · ${ch.touches}次觸碰${live ? '' : ' · 已破'}`, Math.min(X(ib), W - 150), ch.base === 'highs' ? yy : yy, live ? 'rgba(225,228,234,1)' : 'rgba(225,228,234,0.6)', 'left', ch.base === 'highs' ? 'bottom' : 'top');
 }
-if (c.paShow.pivots) {
-ctx.font = '600 9px sans-serif'; ctx.textAlign = 'center';
-for (const p of pa.pivots || []) {
-const i = idx(p.ts);
-if (i == null || i < from - 1 || i > to) continue;
-const x = X(i), up = p.side === 'high', y = Y(p.price) + (up ? -5 : 5);
-const col = p.label === 'HH' || p.label === 'HL' ? T.up : p.label ? T.down : T.muted;
-ctx.fillStyle = col; ctx.beginPath();
-if (up) { ctx.moveTo(x - 3, y - 4); ctx.lineTo(x + 3, y - 4); ctx.lineTo(x, y); } else { ctx.moveTo(x - 3, y + 4); ctx.lineTo(x + 3, y + 4); ctx.lineTo(x, y); }
-ctx.closePath(); ctx.fill();
-if (p.label) { ctx.textBaseline = up ? 'bottom' : 'top'; ctx.fillText(p.label, x, up ? y - 5 : y + 5); }
+if (show.wm) for (const d of pa.wm || []) {
+const i1 = idx(d.first.ts), im = idx(d.neckline.ts), i2 = idx(d.second.ts);
+if (i1 == null || im == null || i2 == null || i2 < from) continue;
+const col = d.status === 'failed' ? 'rgba(120,123,134,0.7)' : d.shape === 'W' ? 'rgba(38,166,154,0.95)' : 'rgba(239,83,80,0.95)';
+ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+ctx.beginPath(); ctx.moveTo(X(i1), Y(d.first.price)); ctx.lineTo(X(im), Y(d.neckline.price)); ctx.lineTo(X(i2), Y(d.second.price)); ctx.stroke();
+const ie = d.status_ts != null ? idx(d.status_ts) ?? data.length - 1 : data.length - 1;
+ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(X(i1), Y(d.neckline.price)); ctx.lineTo(X(ie), Y(d.neckline.price)); ctx.stroke(); ctx.setLineDash([]);
+label(`${d.shape} 頸線 ${fmt(d.neckline.price)} · 目標 ${fmt(d.target)}${d.status === 'confirmed' ? '' : d.status === 'failed' ? ' · 失敗' : ' · 形成中'}`, X(im), Y(d.neckline.price), col, 'center', d.shape === 'W' ? 'bottom' : 'top');
 }
+if (show.events) for (const r of pa.ranges || []) for (const [k, e] of (r.events || []).entries()) {
+const i = idx(e.ts);
+if (i == null || i < from || i > to) continue;
+const word = k === r.events.length - 1 || chart.getBarSpace().bar >= 14;
+const x = X(i), up = e.side === 'up';
+const y = Y(e.price) + (up ? -10 : 10);
+const text = e.type === 'breakout' ? '突破' : e.type === 'failed' ? '失敗' : '回測';
+const col = e.type === 'failed' ? 'rgba(239,83,80,1)' : e.type === 'test' ? 'rgba(242,201,76,1)' : up ? T.up : T.down;
+ctx.fillStyle = col; ctx.font = '600 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = up ? 'bottom' : 'top';
+ctx.fillText(`${e.type === 'failed' ? '✕' : e.type === 'test' ? '○' : up ? '▲' : '▼'}${word ? text : ''}`, x, y);
 }
 ctx.restore();
 return true;
@@ -1799,7 +1832,7 @@ ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
-ctx.paShow = { pivots: visible.has('pa/pivots'), channel: visible.has('pa/channel'), range: visible.has('pa/range') };
+ctx.paShow = Object.fromEntries(['ranges', 'channels', 'wm', 'events', 'zones'].map((x) => [x, visible.has(`pa/${x}`)]));
 ctx.drawings = (state.drawings || []).filter((d) => d.path && visible.has(d.path));
 if (ctx.selectedDrawing && !ctx.drawings.some((d) => d.id === ctx.selectedDrawing)) ctx.selectedDrawing = null;
 ctx.orders = state.orders || [];
@@ -2143,129 +2176,6 @@ return { groups, relation, squeeze_pct_threshold: SQUEEZE_PCT };
 }
 return { GROUPS, ANCHOR, SQUEEZE_PCT, PLOT_GROUPS, META, compute, describe };
 })();
-__M['indicators/pa.js'] = (() => {
-const FRACTAL = 2, ATR_N = 14, MIN_SWING_ATR = 0.5;
-const RANGE = { window: 10, overlap: 0.65, dojiInside: 0.4, widthAtr: 3, score: 0.6, dojiBody: 0.25 };
-const KEEP_PIVOTS = 60, KEEP_RANGES = 20;
-const META = {
-name: 'PA', label: 'PA 結構（pivots / channel / range）', paramsText: `fractal ${FRACTAL}, ${MIN_SWING_ATR} ATR`, pane: 'main', order: 55,
-defaultOn: true, plot: { custom: 'pa' },
-items: [{ id: 'pivots', label: 'pivots（HH / HL / LH / LL）', defaultOn: true }, { id: 'channel', label: 'channel', defaultOn: true }, { id: 'range', label: 'range box', defaultOn: false }],
-};
-function atrSeries(bars) {
-const out = new Array(bars.length).fill(null);
-let atr = null;
-for (let i = 0; i < bars.length; i++) {
-const b = bars[i], p = bars[i - 1];
-const tr = p ? Math.max(b.high - b.low, Math.abs(b.high - p.close), Math.abs(b.low - p.close)) : b.high - b.low;
-atr = i < ATR_N ? (atr == null ? tr : atr + (tr - atr) / (i + 1)) : atr + (tr - atr) / ATR_N; // Wilder
-out[i] = atr;
-}
-return out;
-}
-function pivots(bars, atr, last) {
-const raw = [];
-for (let i = FRACTAL; i <= last - FRACTAL; i++) {
-let hi = true, lo = true;
-for (let k = 1; k <= FRACTAL; k++) {
-if (!(bars[i].high >= bars[i - k].high && bars[i].high > bars[i + k].high)) hi = false;
-if (!(bars[i].low <= bars[i - k].low && bars[i].low < bars[i + k].low)) lo = false;
-}
-if (hi) raw.push({ i, side: 'high', price: bars[i].high });
-if (lo) raw.push({ i, side: 'low', price: bars[i].low });
-}
-const kept = [];
-for (const p of raw) {
-const prev = kept.at(-1);
-if (!prev) { kept.push(p); continue; }
-if (prev.side === p.side) {
-if (p.side === 'high' ? p.price > prev.price : p.price < prev.price) kept[kept.length - 1] = p;
-continue;
-}
-if (Math.abs(p.price - prev.price) >= MIN_SWING_ATR * (atr[p.i] || 0)) kept.push(p);
-}
-const lastOf = { high: null, low: null };
-return kept.map((p) => {
-const before = lastOf[p.side];
-const label = before == null ? null : p.side === 'high' ? (p.price > before.price ? 'HH' : 'LH') : (p.price > before.price ? 'HL' : 'LL');
-lastOf[p.side] = p;
-return { ...p, ts: bars[p.i].timestamp, label };
-});
-}
-function channelFrom(bars, piv, side, k, last) {
-const same = piv.filter((p) => p.side === side);
-const b = same[same.length - 1 - k], a = same[same.length - 2 - k];
-if (!a || !b || b.i === a.i) return null;
-const slope = (b.price - a.price) / (b.i - a.i);
-let ext = null;
-for (let i = a.i; i <= b.i; i++) {
-const v = side === 'high' ? bars[i].low : bars[i].high;
-if (ext == null || (side === 'high' ? v - (a.price + slope * (i - a.i)) < ext.off : v - (a.price + slope * (i - a.i)) > ext.off)) ext = { i, price: v, off: v - (a.price + slope * (i - a.i)) };
-}
-const at = (i, off = 0) => ({ ts: bars[Math.min(i, last)].timestamp, price: a.price + slope * (i - a.i) + off });
-return {
-base: side === 'high' ? 'highs' : 'lows', current: k === 0,
-line: [{ ts: a.ts, price: a.price }, { ts: b.ts, price: b.price }],
-parallel: [at(a.i, ext.off), at(b.i, ext.off)], through: { ts: bars[ext.i].timestamp, price: ext.price },
-slope_per_bar: slope, width: Math.abs(ext.off),
-at_last: { ts: bars[last].timestamp, line: a.price + slope * (last - a.i), parallel: a.price + slope * (last - a.i) + ext.off },
-};
-}
-function channels(bars, piv, last) {
-const highs = piv.filter((p) => p.side === 'high'), lows = piv.filter((p) => p.side === 'low');
-const h = highs.slice(-2), l = lows.slice(-2);
-const down = h.length === 2 && l.length === 2 && h[1].price < h[0].price && l[1].price < l[0].price;
-const up = h.length === 2 && l.length === 2 && h[1].price > h[0].price && l[1].price > l[0].price;
-const side = down ? 'high' : up ? 'low' : (h[0]?.i ?? -1) > (l[0]?.i ?? -1) ? 'high' : 'low';
-const dir = down ? 'down' : up ? 'up' : 'mixed';
-const cur = channelFrom(bars, piv, side, 0, last), prev = channelFrom(bars, piv, side, 1, last);
-return { dir, current: cur, previous: prev };
-}
-function ranges(bars, atr, last) {
-const W = RANGE.window, out = [];
-const overlap = (x, y) => { const inter = Math.min(x.high, y.high) - Math.max(x.low, y.low), uni = Math.max(x.high, y.high) - Math.min(x.low, y.low); return uni > 0 ? Math.max(0, inter) / uni : 1; };
-let box = null;
-for (let e = W - 1; e <= last; e++) {
-const s = e - W + 1;
-let ov = 0, di = 0, hi = -Infinity, lo = Infinity;
-for (let i = s; i <= e; i++) {
-const b = bars[i], p = bars[i - 1];
-if (i > s) ov += overlap(b, p);
-const range = b.high - b.low, body = Math.abs(b.close - b.open);
-const inside = p && b.high <= p.high && b.low >= p.low;
-if (inside || (range > 0 && body / range <= RANGE.dojiBody)) di += 1;
-hi = Math.max(hi, b.high); lo = Math.min(lo, b.low);
-}
-const mo = ov / (W - 1), share = di / W, width = (hi - lo) / (atr[e] || Infinity);
-const score = (mo >= RANGE.overlap ? 0.4 : 0) + (share >= RANGE.dojiInside ? 0.2 : 0) + (width <= RANGE.widthAtr ? 0.2 : 0);
-if (score >= RANGE.score) {
-if (box && s <= box.e + 1) { box.e = e; box.top = Math.max(box.top, hi); box.bottom = Math.min(box.bottom, lo); box.score = Math.max(box.score, score); }
-else { box = { s, e, top: hi, bottom: lo, score, overlap: mo, doji_inside: share, width_atr: width }; out.push(box); }
-}
-}
-return out.slice(-KEEP_RANGES).map((b) => ({ from_ts: bars[b.s].timestamp, to_ts: bars[b.e].timestamp, bars: b.e - b.s + 1, top: b.top, bottom: b.bottom,
-score: Math.round(b.score * 100) / 100, overlap: Math.round(b.overlap * 100) / 100, doji_inside: Math.round(b.doji_inside * 100) / 100, width_atr: Math.round(b.width_atr * 100) / 100, i0: b.s, i1: b.e }));
-}
-function structureAt(bars, i = bars.length - 1) {
-if (!bars.length) return null;
-const last = Math.max(0, Math.min(i, bars.length - 1));
-const atr = atrSeries(bars.slice(0, last + 1));
-const piv = pivots(bars, atr, last);
-const ch = channels(bars, piv, last);
-const rs = ranges(bars, atr, last);
-const strip = ({ i: _i, i0: _a, i1: _b, ...x }) => x;
-return {
-atr: atr[last], pivots: piv.slice(-KEEP_PIVOTS).map(strip), channel: { dir: ch.dir, current: ch.current, previous: ch.previous },
-ranges: rs.map(strip), active_range: (() => { const r = rs.at(-1); return r && r.i1 >= last - 1 ? strip(r) : null; })(),
-};
-}
-function compute(bars) {
-const rows = bars.map(() => ({}));
-if (bars.length) rows[rows.length - 1] = { pa: structureAt(bars) };
-return rows;
-}
-return { FRACTAL, RANGE, META, structureAt, compute };
-})();
 __M['card/indicators.js'] = (() => {
 const { META: GAP_M, compute: gap } = __M['indicators/gap.js'];
 const { META: VOL_M, compute: vol } = __M['indicators/vol.js'];
@@ -2276,9 +2186,8 @@ const { META: BOLL_M, compute: boll } = __M['indicators/boll.js'];
 const { META: MACD_M, compute: macd } = __M['indicators/macd.js'];
 const { META: KDJ_M, compute: kdj } = __M['indicators/kdj.js'];
 const { META: GMMA_M, compute: gmma } = __M['indicators/gmma.js'];
-const { META: PA_M, compute: pa } = __M['indicators/pa.js'];
 const COMPUTE = Object.fromEntries([[GAP_M, gap], [VOL_M, vol], [VRVP_M, vrvp], [MA_M, ma], [VWAP_M, vwap],
-[BOLL_M, boll], [MACD_M, macd], [KDJ_M, kdj], [GMMA_M, gmma], [PA_M, pa]].map(([m, f]) => [m.name, f]));
+[BOLL_M, boll], [MACD_M, macd], [KDJ_M, kdj], [GMMA_M, gmma]].map(([m, f]) => [m.name, f]));
 return { COMPUTE };
 })();
 __M['card/shell.js'] = (() => {
@@ -2327,7 +2236,22 @@ const CSS = `
 .kc-tab{max-width:150px;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
 .kc-tab.miss::after{content:' ⚠'}
 .kc-miss{color:var(--warning,#f2c94c);font-size:11px;margin-bottom:4px}
-@media (max-width:480px){.kc{min-height:720px}.kc-chart{height:380px}.kc-tab{max-width:120px}}`;
+.kc.kc-rep{min-height:1000px}
+.kc-report{margin:8px 0 6px;border:1px solid var(--border,#2a2e39);border-radius:6px;padding:8px 10px;display:grid;grid-template-columns:1fr;gap:8px}
+.kc-report h3{margin:0;font-size:14px;line-height:1.35}
+.kc-report .sub{color:var(--muted-foreground,#787b86);font-size:11px}
+.kc-dir{display:flex;flex-direction:column;gap:3px}
+.kc-dir .bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--border,#2a2e39)}
+.kc-dir .bull{background:#26a69a}.kc-dir .bear{background:#ef5350}
+.kc-dir .nums{display:flex;justify-content:space-between;font-weight:600;font-size:12px}
+.kc-dir .nums .b{color:#26a69a}.kc-dir .nums .s{color:#ef5350}
+.kc-dir .lbl{color:var(--muted-foreground,#787b86);font-size:11px}
+.kc-kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px}.kc-kv b{font-weight:600}
+.kc-report p{margin:0}.kc-report .k{color:var(--muted-foreground,#787b86);font-size:11px;display:block}
+.kc-report ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+@container kcard (min-width:640px){.kc-report{grid-template-columns:minmax(220px,1fr) 2fr;column-gap:16px}.kc-report .head{grid-column:1/-1}}
+@media (max-width:480px){.kc{min-height:720px}.kc.kc-rep{min-height:1180px}.kc-chart{height:380px}.kc-tab{max-width:120px}}
+.kc{container:kcard/inline-size}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
 window.__kcardKline ||= new Promise((ok, fail) => {
@@ -2352,13 +2276,42 @@ text: cv('--foreground', T.text), muted: cv('--muted-foreground', T.muted), huma
 });
 }
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+function renderReport(r, panes) {
+const box = el('section', 'kc-report');
+const head = el('div', 'head');
+const pane = panes.find((p) => p.id === r.pane);
+head.append(el('h3', null, r.title), el('div', 'sub', `${pane?.label || r.tf || ''}${r.as_of_et ? ` · 截至 ${r.as_of_et} ET` : ''}${r.engine ? ` · ${r.engine} · ${r.profile}` : ''}`));
+const left = el('div', 'kc-dir');
+const d = r.direction;
+if (d) {
+const bar = el('div', 'bar'), bu = el('div', 'bull'), be = el('div', 'bear');
+bu.style.width = `${d.bull}%`; be.style.width = `${d.bear}%`; bar.append(bu, be);
+const nums = el('div', 'nums'); nums.append(el('span', 'b', `多 ${d.bull.toFixed(1)}%`), el('span', 's', `空 ${d.bear.toFixed(1)}%`));
+left.append(nums, bar, el('div', 'lbl', d.label || '偏向，不是勝率'));
+if (d.by_tf?.length) left.append(el('div', 'lbl', d.by_tf.map((x) => `${x.tf} z ${x.z > 0 ? '+' : ''}${x.z}`).join(' · ')));
+} else left.append(el('div', 'lbl', r.error || '沒有方向分數'));
+const kv = el('div', 'kc-kv');
+const sign = (v) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
+if (r.ema20_dist_atr != null) { const x = el('span'); x.append('EMA20 距離 ', el('b', null, `${sign(r.ema20_dist_atr)} ×ATR`)); kv.append(x); }
+if (r.atr14 != null) { const x = el('span'); x.append(`ATR14（${r.tf}）`, el('b', null, r.atr14.toFixed(2))); kv.append(x); }
+left.append(kv);
+if (r.top?.length) left.append(el('div', 'lbl', `主要貢獻：${r.top.map((c) => `${c.item} ${c.contribution > 0 ? '+' : ''}${c.contribution}`).join('、')}`));
+const right = el('div');
+right.style.display = 'flex'; right.style.flexDirection = 'column'; right.style.gap = '6px';
+if (r.meaning) { const p = el('p'); p.append(el('span', 'k', '意義'), r.meaning); right.append(p); }
+if (r.observation) { const p = el('p'); p.append(el('span', 'k', '觀察'), r.observation); right.append(p); }
+const ol = el('ol'); for (const t of r.points || []) ol.append(el('li', null, t));
+const pts = el('div'); pts.append(el('span', 'k', '重點'), ol); right.append(pts);
+box.append(head, left, right);
+return box;
+}
 async function boot(script) {
 let cfg = null;
 let prev = script?.previousElementSibling;
 while (prev && !(prev.tagName === 'SCRIPT' && prev.type === 'text/kcard')) prev = prev.previousElementSibling;
 try { cfg = JSON.parse((prev || document.querySelector('script[type="text/kcard"]'))?.textContent || 'null'); } catch { cfg = null; }
 if (!document.getElementById('kc-css')) { const st = el('style'); st.id = 'kc-css'; st.textContent = CSS; document.head.appendChild(st); }
-const root = el('div', 'kc');
+const root = el('div', `kc${cfg?.r ? ' kc-rep' : ''}`); // p1.54: a report card reserves room for its panel
 if (script && document.body?.contains(script)) script.parentNode.insertBefore(root, script.nextSibling);
 else if (document.body) document.body.appendChild(root);
 else await new Promise((ok) => document.addEventListener('DOMContentLoaded', () => { document.body.appendChild(root); ok(); }, { once: true }));
@@ -2383,7 +2336,8 @@ const linesBox = el('details', 'kc-lines'), linesSum = el('summary'), linesList 
 linesBox.append(linesSum, linesList);
 const noteEl = el('textarea', 'kc-note'); noteEl.rows = 1; noteEl.placeholder = '備註（一則，送出時一起帶給 agent）';
 const bottom = el('div', 'kc-row'), msg = el('div', 'kc-msg'), foot = el('div', 'kc-foot');
-root.append(tabsRow, head, tools, linesBox, missEl, chartEl, noteEl, bottom, msg, foot);
+const reportEl = data.report ? renderReport(data.report, data.panes) : null;
+root.append(tabsRow, head, tools, linesBox, missEl, chartEl, ...(reportEl ? [reportEl] : []), noteEl, bottom, msg, foot);
 const say = (t, err) => { msg.textContent = t || ''; msg.classList.toggle('err', !!err); };
 foot.append(el('span', null, data.title), el('span', null, `資料：${data.source}`), el('span', null, `快照於 ${data.frozen_at}`), el('span', null, `畫線 revision ${data.base_revision}`), el('span', null, `卡片 ${data.id}`));
 const shared = data.drawings.map((d) => ({ ...d, anchors: d.anchors.map((a) => ({ ...a })) }));
@@ -2405,13 +2359,15 @@ temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
 registerAll(k, data.metas);
 const view = createCanvasChart(k, chartEl, { metas: data.metas, interactive: true, legendCollapsed: true });
-const offGroups = {};
+const offGroups = { subs: !!data.report };
+const subNames = new Set(data.metas.filter((m) => m.pane !== 'main').map((m) => `indicators/${m.name}`));
 let cur = 0, mode = null, locked = false, sent = null, selLine = null, draftSeq = 0;
 const P = () => panes[cur];
 const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]), pick = P().pa;
 return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/')
-|| (Array.isArray(pick) && p.startsWith('pa/') ? pick.includes(p.slice(3)) && !offGroups.indicators : shown(p, data.off) && !off.some((g) => g.re.test(p)))));
+|| (Array.isArray(pick) && p.startsWith('pa/') ? pick.includes(p.slice(3)) && !offGroups.indicators : shown(p, data.off) && !off.some((g) => g.re.test(p))))
+.filter((p) => !(offGroups.subs && subNames.has(p))));
 };
 const daily = (p) => p.bars.length > 1 && p.bars[1].timestamp - p.bars[0].timestamp >= 864e5 * 0.9;
 const dateOf = (ts) => new Date(ts).toLocaleDateString('sv-SE', { timeZone: 'America/New_York' });
@@ -2488,8 +2444,8 @@ const b = el('button', `kc-btn kc-tab${i === cur ? ' on' : ''}${p.missing ? ' mi
 b.onclick = () => show(i); tabsRow.appendChild(b);
 });
 head.innerHTML = '';
-for (const g of GROUPS) {
-const b = el('button', `kc-btn${offGroups[g.id] ? ' off' : ''}`, g.label); b.title = `顯示／隱藏 ${g.label}`;
+for (const g of [...GROUPS, ...(subNames.size ? [{ id: 'subs', label: '副圖' }] : [])]) {
+const b = el('button', `kc-btn${offGroups[g.id] ? ' off' : ''}`, g.label); b.title = g.id === 'subs' ? '展開／收合下方副圖（MACD、KDJ…）' : `顯示／隱藏 ${g.label}`;
 b.onclick = () => { offGroups[g.id] = !offGroups[g.id]; refresh(); renderHead(); };
 head.appendChild(b);
 }
