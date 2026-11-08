@@ -665,11 +665,26 @@ const { from, to } = chart.getVisibleRange();
 const idx = (ts) => { if (ts == null) return null; const i = barIndexAt(data, ts); return i >= 0 && data[i].timestamp === ts ? i : null; };
 const X = (i) => xAxis.convertToPixel(i), Y = (p) => yAxis.convertToPixel(p);
 const half = chart.getBarSpace().halfBar, W = bounding.width;
-const label = (text, x, y, col, align = 'left', base = 'bottom') => {
-ctx.font = '600 10px sans-serif'; ctx.textAlign = align; ctx.textBaseline = base;
-const w = ctx.measureText(text).width, bx = align === 'right' ? x - w - 3 : x - 1, by = base === 'bottom' ? y - 13 : y;
-ctx.fillStyle = 'rgba(19,23,34,0.72)'; ctx.fillRect(bx, by, w + 4, 13);
-ctx.fillStyle = col; ctx.fillText(text, align === 'right' ? x - 1 : x + 1, base === 'bottom' ? y - 1 : y + 1);
+const queue = [], H = bounding.height;
+const label = (text, x, y, col, align = 'left', base = 'bottom', prio = 2) => {
+ctx.font = '600 10px sans-serif';
+const w = ctx.measureText(text).width + 4;
+let bx = align === 'right' ? x - w + 1 : align === 'center' ? x - w / 2 : x - 1;
+bx = Math.max(0, Math.min(bx, W - w));
+queue.push({ text, col, bx, by: base === 'bottom' ? y - 13 : y, w, dir: base === 'bottom' ? -1 : 1, prio });
+};
+const flush = () => {
+const placed = [];
+const hit = (a, by) => by < 0 || by > H - 13 || placed.some((b) => a.bx < b.bx + b.w && b.bx < a.bx + a.w && by < b.by + 13 && b.by < by + 13);
+for (const q of queue.sort((a, b) => b.prio - a.prio || a.by - b.by)) {
+const tries = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((k) => q.by + k * q.dir * 14);
+const by = tries.find((y) => !hit(q, y));
+if (by == null && q.prio <= 1) continue;
+q.by = by ?? q.by;
+placed.push(q);
+ctx.fillStyle = 'rgba(19,23,34,0.85)'; ctx.fillRect(q.bx, q.by, q.w, 13);
+ctx.fillStyle = q.col; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(q.text, q.bx + 2, q.by + 1);
+}
 };
 const fmt = (v) => Number(v).toFixed(2);
 ctx.save();
@@ -677,7 +692,7 @@ if (show.zones) for (const z of pa.zones || []) {
 const y0 = Y(z.hi), y1 = Y(z.lo), h = Math.max(3, y1 - y0);
 const a = Math.min(0.22, 0.05 + 0.03 * z.score);
 ctx.fillStyle = `rgba(171,71,188,${a})`; ctx.fillRect(0, y0 - (h === 3 ? 1 : 0), W, h);
-label(`共振 ${z.score} · ${z.sources[0] || ''}${z.sources.length > 1 ? ` +${z.sources.length - 1}` : ''}`, W - 64, y0, 'rgba(206,147,216,0.95)', 'right');
+label(`共振 ${z.score} · ${z.sources[0] || ''}${z.sources.length > 1 ? ` +${z.sources.length - 1}` : ''}`, W - 64, y0, 'rgba(206,147,216,0.95)', 'right', 'bottom', 1);
 }
 if (show.ranges) for (const r of pa.ranges || []) {
 const i0 = idx(r.from_ts), i1 = r.status === 'active' || r.status.endsWith('pending') ? data.length - 1 : idx(r.to_ts);
@@ -691,8 +706,8 @@ ctx.fillStyle = 'rgba(242,201,76,0.9)';
 for (const t of r.upper_test_ts || []) { const i = idx(t); if (i != null) ctx.fillRect(X(i) - 1, y0 - 3, 2, 6); }
 for (const t of r.lower_test_ts || []) { const i = idx(t); if (i != null) ctx.fillRect(X(i) - 1, y1 - 3, 2, 6); }
 const lx = Math.max(x0, 2), col = live ? 'rgba(242,201,76,1)' : 'rgba(242,201,76,0.6)';
-label(`上沿 ${fmt(r.upper)} · ${r.upper_tests}次測試`, lx, y0, col);
-label(`下沿 ${fmt(r.lower)} · ${r.lower_tests}次測試`, lx, y1, col, 'left', 'top');
+label(`上沿 ${fmt(r.upper)} · ${r.upper_tests}次測試${r.state === 'confirmed' ? ' · 已確認' : r.state ? ' · 形成中' : ''}`, lx, y0, col, 'left', 'bottom', 3);
+label(`下沿 ${fmt(r.lower)} · ${r.lower_tests}次測試`, lx, y1, col, 'left', 'top', 3);
 }
 if (show.channels) for (const ch of pa.channels || []) {
 const ia = idx(ch.line[0].ts), ib = idx(ch.line[1].ts);
@@ -729,6 +744,7 @@ const col = e.type === 'failed' ? 'rgba(239,83,80,1)' : e.type === 'test' ? 'rgb
 ctx.fillStyle = col; ctx.font = '600 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = up ? 'bottom' : 'top';
 ctx.fillText(`${e.type === 'failed' ? '✕' : e.type === 'test' ? '○' : up ? '▲' : '▼'}${word ? text : ''}`, x, y);
 }
+flush();
 ctx.restore();
 return true;
 }
@@ -2236,7 +2252,7 @@ const CSS = `
 .kc-tab{max-width:150px;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
 .kc-tab.miss::after{content:' ⚠'}
 .kc-miss{color:var(--warning,#f2c94c);font-size:11px;margin-bottom:4px}
-.kc.kc-rep{min-height:1000px}
+.kc.kc-rep{min-height:1400px}
 .kc-report{margin:8px 0 6px;border:1px solid var(--border,#2a2e39);border-radius:6px;padding:8px 10px;display:grid;grid-template-columns:1fr;gap:8px}
 .kc-report h3{margin:0;font-size:14px;line-height:1.35}
 .kc-report .sub{color:var(--muted-foreground,#787b86);font-size:11px}
@@ -2249,8 +2265,20 @@ const CSS = `
 .kc-kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px}.kc-kv b{font-weight:600}
 .kc-report p{margin:0}.kc-report .k{color:var(--muted-foreground,#787b86);font-size:11px;display:block}
 .kc-report ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.kc-contrib{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.kc-contrib .row{display:grid;grid-template-columns:minmax(0,1.3fr) 1fr 44px;gap:6px;align-items:center;font-size:11px}
+.kc-contrib .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kc-contrib .track{position:relative;height:8px;background:var(--border,#2a2e39);border-radius:4px}
+.kc-contrib .track::after{content:'';position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--muted-foreground,#787b86)}
+.kc-contrib .b{position:absolute;left:50%;top:0;bottom:0;background:#26a69a;border-radius:0 4px 4px 0}
+.kc-contrib .s{position:absolute;right:50%;top:0;bottom:0;background:#ef5350;border-radius:4px 0 0 4px}
+.kc-contrib .v{text-align:right;font-variant-numeric:tabular-nums}
+.kc-tfs{display:flex;flex-direction:column;gap:4px;margin-top:6px;font-size:11px}
+.kc-tfs .row{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--border,#2a2e39);padding-top:3px}
+.kc-tfs .rs{color:var(--muted-foreground,#787b86)}
+.kc-report ul.src{margin:2px 0 0;padding-left:16px;font-size:11px;color:var(--muted-foreground,#787b86);word-break:break-all}
 @container kcard (min-width:640px){.kc-report{grid-template-columns:minmax(220px,1fr) 2fr;column-gap:16px}.kc-report .head{grid-column:1/-1}}
-@media (max-width:480px){.kc{min-height:720px}.kc.kc-rep{min-height:1180px}.kc-chart{height:380px}.kc-tab{max-width:120px}}
+@media (max-width:480px){.kc{min-height:720px}.kc.kc-rep{min-height:2150px}.kc-chart{height:380px}.kc-tab{max-width:120px}}
 .kc{container:kcard/inline-size}`;
 function loadKline() {
 if (window.klinecharts) return Promise.resolve(window.klinecharts);
@@ -2295,13 +2323,48 @@ const sign = (v) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
 if (r.ema20_dist_atr != null) { const x = el('span'); x.append('EMA20 距離 ', el('b', null, `${sign(r.ema20_dist_atr)} ×ATR`)); kv.append(x); }
 if (r.atr14 != null) { const x = el('span'); x.append(`ATR14（${r.tf}）`, el('b', null, r.atr14.toFixed(2))); kv.append(x); }
 left.append(kv);
-if (r.top?.length) left.append(el('div', 'lbl', `主要貢獻：${r.top.map((c) => `${c.item} ${c.contribution > 0 ? '+' : ''}${c.contribution}`).join('、')}`));
+const cs = (r.contributions || []).filter((c) => c.contribution);
+if (cs.length) {
+const max = Math.max(...cs.map((c) => Math.abs(c.contribution)), 1e-9);
+const wrap = el('div', 'kc-contrib');
+wrap.append(el('div', 'lbl', `${r.tf} 各項貢獻（權重：${r.weights_source === 'hand' ? '手調' : r.weights_source || '—'}）`));
+for (const c of [...cs].sort((a, b) => b.contribution - a.contribution)) {
+const row = el('div', 'row'), name = el('span', 'nm', c.label || c.item), track = el('span', 'track'), bar = el('span', c.contribution > 0 ? 'b' : 's');
+bar.style.width = `${(50 * Math.abs(c.contribution)) / max}%`;
+track.append(bar);
+row.append(name, track, el('span', 'v', `${c.contribution > 0 ? '+' : ''}${c.contribution.toFixed(3)}`));
+row.title = `值 ${c.value} × 權重 ${c.weight}`;
+wrap.append(row);
+}
+left.append(wrap);
+}
+const tfs = Object.entries(r.by_tf || {});
+if (tfs.length) {
+const t = el('div', 'kc-tfs');
+for (const [tf, x] of tfs) {
+const row = el('div', 'row');
+row.append(el('b', null, tf), el('span', null, `最後一根：${x.candles || '—'}`), el('span', 'rs', `區間：${x.range_state || '—'}`));
+t.append(row);
+}
+left.append(t);
+}
 const right = el('div');
 right.style.display = 'flex'; right.style.flexDirection = 'column'; right.style.gap = '6px';
 if (r.meaning) { const p = el('p'); p.append(el('span', 'k', '意義'), r.meaning); right.append(p); }
 if (r.observation) { const p = el('p'); p.append(el('span', 'k', '觀察'), r.observation); right.append(p); }
 const ol = el('ol'); for (const t of r.points || []) ol.append(el('li', null, t));
 const pts = el('div'); pts.append(el('span', 'k', '重點'), ol); right.append(pts);
+if (r.news_chips?.text) {
+const p = el('div'); p.append(el('span', 'k', '新聞與籌碼（agent 整理，引擎不算）'), el('p', null, r.news_chips.text));
+if (r.news_chips.sources?.length) { const ul = el('ul', 'src'); for (const x of r.news_chips.sources) ul.append(el('li', null, x)); p.append(ul); }
+right.append(p);
+}
+if (r.user_view?.length) {
+const p = el('div'); p.append(el('span', 'k', '使用者看法'));
+const STANCE = { agree: '同意', disagree: '不同意', partly: '部分同意' };
+for (const u of r.user_view) { const q = el('p'); q.append(el('b', null, `${STANCE[u.stance] || u.stance}`), ` · note ${u.note_id}${u.note ? `「${u.note}」` : ''}：${u.evidence}`); p.append(q); }
+right.append(p);
+}
 box.append(head, left, right);
 return box;
 }
