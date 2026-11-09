@@ -242,7 +242,6 @@ out.push({ path: 'system/bar-number', kind: 'barno', label: 'bar 編號' });
 if (state.futures) out.push({ path: 'futures/feed', kind: 'feed', label: 'Tradovate SIM（成交、掛單）' });
 for (const c of state.intakeCleaners || []) out.push({ path: `system/intake/${c.name}`, kind: 'intake', label: c.label });
 for (const n of state.notes || []) out.push({ path: n.path, kind: 'note', ref: n.id, label: n.text });
-for (const r of state.reports || []) out.push({ path: r.path, kind: 'report', ref: r.id, label: r.title });
 for (const o of state.orders || []) {
 const base = tradePath(state, o);
 const kind = o.kind === 'plan' ? 'plan' : 'order';
@@ -1071,7 +1070,6 @@ note: { icon: '✎', title: 'Note' },
 signal: { icon: '◆', title: 'Signal' },
 event: { icon: '⚡', title: '事件' },
 fill: { icon: '$', title: '成交' },
-report: { icon: '▤', title: '報告' }, // p1.56: PA report card at its as-of bar
 };
 function inLoaded(data, ts) {
 if (!data.length) return false;
@@ -1093,11 +1091,10 @@ const side = f.side === 'buy' ? '買' : f.side === 'sell' ? '賣' : f.side;
 add(f.ts, { kind: 'fill', side: f.side, author: f.author, agent: f.path.startsWith('agent/') ? f.path.split('/')[1] : null,
 title: f.text, body: `${side} ${f.qty ?? ''} ${f.contract ?? ''}`.replace(/\s+/g, ' ').trim(), ts: f.ts, price: f.price, path: f.path });
 }
-for (const r of c.reports || []) add(r.as_of_ts, { kind: 'report', author: 'agent', agent: 'report', title: r.title, body: r.bull != null ? `多 ${r.bull}% / 空 ${r.bear}%（偏向，不是勝率）` : '', ts: r.as_of_ts, path: r.path, reportId: r.id, tf: r.tf, bull: r.bull, bear: r.bear, created_at: r.created_at });
 for (const s of c.signals) for (const t of s.triggers || []) add(t.ts, { kind: 'signal', author: s.author, agent: s.agent, title: s.name, body: t.note || '', ts: t.ts, price: t.price, path: s.path });
 return by;
 }
-const KIND_ORDER = ['fill', 'report', 'note', 'signal', 'event'];
+const KIND_ORDER = ['fill', 'note', 'signal', 'event'];
 function drawEventRow(ctx, c, data, from, to, bounding, xAxis) {
 c.eventHits = [];
 const bars = [...eventsByBar(c, data)].filter(([i]) => i >= from && i < to).sort((a, b) => a[0] - b[0]);
@@ -1129,10 +1126,6 @@ if (kind === 'fill') {
 const sides = new Set(items.map((it) => it.side));
 ctx.fillStyle = sides.size > 1 || sides.has('spread') ? T.agent : sides.has('buy') ? T.up : T.down;
 ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-} else if (kind === 'report') { // p1.56: gold square, distinct from note circles
-ctx.fillStyle = '#f2c94c';
-ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(g.x - EV_R, y - EV_R, EV_R * 2, EV_R * 2, 3); else ctx.rect(g.x - EV_R, y - EV_R, EV_R * 2, EV_R * 2);
-ctx.fill(); ctx.stroke();
 } else if (authors.size > 1) { // mixed: left half human, right half agent
 ctx.fillStyle = T.human; ctx.beginPath(); ctx.arc(g.x, y, EV_R, Math.PI / 2, Math.PI * 1.5); ctx.fill();
 ctx.fillStyle = T.agent; ctx.beginPath(); ctx.arc(g.x, y, EV_R, -Math.PI / 2, Math.PI / 2); ctx.fill();
@@ -1141,7 +1134,7 @@ ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.stroke();
 ctx.fillStyle = authors.has('agent') ? T.agent : T.human;
 ctx.beginPath(); ctx.arc(g.x, y, EV_R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 }
-ctx.fillStyle = kind === 'report' ? '#131722' : T.badgeText; ctx.font = kind === 'fill' ? '700 11px sans-serif' : '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+ctx.fillStyle = T.badgeText; ctx.font = kind === 'fill' ? '700 11px sans-serif' : '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 ctx.fillText(EVENT_KINDS[kind].icon, g.x, y + 0.5);
 if (items.length > 1) {
 const t = items.length > 99 ? '99+' : String(items.length);
@@ -1372,7 +1365,8 @@ ctx.fillRect(0, Math.min(y0, y1), bounding.width, Math.abs(y1 - y0));
 }
 }
 const fg = focusGroup(c);
-const alphaOf = (it) => (it.group == null ? (it.hot ? 1 : LEVEL_ALPHA) : fg == null ? (it.plan ? 0.6 : LEVEL_ALPHA) : it.group === fg ? 1 : 0.2);
+const alphaOf = (it) => (c.scope && it.group != null ? (c.scope.dim.has(it.group) ? 0.25 : 1)
+: it.group == null ? (it.hot ? 1 : LEVEL_ALPHA) : fg == null ? (it.plan ? 0.6 : LEVEL_ALPHA) : it.group === fg ? 1 : 0.2);
 const locked = !!c.lockedGroup && c.lockedGroup === fg;
 const breath = 0.5 - 0.5 * Math.cos((performance.now() % 1800) / 1800 * Math.PI * 2);
 const glowBlur = locked ? 5 + 11 * breath : 3 + 7 * breath;
@@ -1529,7 +1523,7 @@ const OHLC = [
 ];
 let collapsed = legendCollapsed;
 let onLegendFold = null;
-const ctx = { tf: 'M5', bars: [], barNo: [], notes: [], reports: [], fills: [], signals: [], orders: [], drawings: [], quotes: {}, hot: null, dragPrice: {}, levelHits: [], showBarNo: true, compact, legendOpen: { ...legendOpen }, rows: {} };
+const ctx = { tf: 'M5', bars: [], barNo: [], notes: [], fills: [], signals: [], orders: [], drawings: [], quotes: {}, hot: null, dragPrice: {}, levelHits: [], showBarNo: true, compact, legendOpen: { ...legendOpen }, rows: {} };
 barNoAt = (ts) => { const i = barIndexAt(ctx.bars, ts); return i >= 0 && ctx.bars[i].timestamp === ts ? ctx.barNo[i]?.n ?? null : null; };
 const updateTitleH = () => {
 const rows = collapsed ? 0 : 2 + chart.getIndicators({ paneId: CANDLE }).filter((i) => i.name !== '__SYS').length;
@@ -1877,6 +1871,7 @@ get selectedDrawing() { return ctx.selectedDrawing || null; },
 selectDrawing(id) { ctx.selectedDrawing = id; redraw(); },
 redraw: () => redraw(),
 setReplayCursor(ts) { if (ctx.replayTs !== ts) { ctx.replayTs = ts; redraw(); } },
+setScope(scope) { ctx.scope = scope || null; redraw(); },
 setFocus(gid, lock) { if (lock !== undefined) ctx.lockedGroup = lock ? gid : null; ctx.treeFocus = lock === undefined ? gid : null; redraw(); },
 setVp(index, opts, lowerTf) {
 ctx.vp = { index, opts, lowerTf, version: (ctx.vp?.version || 0) + 1, key: null };
@@ -1937,7 +1932,6 @@ fitSubPanes();
 updateTitleH();
 ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
-ctx.reports = (state.reports || []).filter((r) => visible.has(r.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
 if (visible.has('futures/feed')) { ctx.fills = [...ctx.fills, ...(state.feedFills || [])]; ctx.feedWorking = state.feedWorking || []; } else ctx.feedWorking = [];
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
