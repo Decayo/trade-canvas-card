@@ -1,4 +1,4 @@
-/*! kcard — trade-canvas T3 card shell. Built from 22 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, public/core/readout.js, public/core/report.js, card/shell.js */
+/*! kcard — trade-canvas T3 card shell. Built from 23 modules: public/core/time.js, public/core/options.js, public/core/layers.js, public/core/theme.js, public/core/vp.js, public/core/drawings.js, public/core/futures.js, public/core/chart.js, public/core/wire.js, indicators/gap.js, indicators/_util.js, indicators/vol.js, indicators/vrvp.js, indicators/ma.js, indicators/vwap.js, indicators/boll.js, indicators/macd.js, indicators/kdj.js, indicators/gmma.js, card/indicators.js, public/core/readout.js, public/core/report.js, card/shell.js */
 (function () {
 window.__kcardScript = document.currentScript;
 var __M = {};
@@ -69,12 +69,19 @@ return ans;
 }
 const RTH_OPEN = 9 * 60 + 30;
 const RTH_CLOSE = 16 * 60;
-function barNumbers(list, tf) {
+function barNumbers(list, tf, futures = false) {
 const p = PERIODS[tf];
 if (!p || p.min >= 1440) return list.map(() => null);
 let day = null, seq = 0;
 return list.map((b) => {
 const e = etParts(b.timestamp);
+if (futures) {
+const since = e.minutes >= 18 * 60 ? e.minutes - 18 * 60 : e.minutes + 6 * 60;
+const date = etParts(b.timestamp + 6 * 36e5).dateKey;
+if (date !== day) { day = date; seq = 0; }
+seq += 1;
+return { n: p.min <= 30 ? Math.floor(since / p.min) + 1 : seq, start: e.hhmm, date };
+}
 if (e.minutes < RTH_OPEN || e.minutes >= RTH_CLOSE) return null;
 if (e.dateKey !== day) { day = e.dateKey; seq = 0; }
 seq += 1;
@@ -232,6 +239,7 @@ const out = [];
 for (const m of metas) out.push({ path: `indicators/${m.name}`, kind: 'indicator', ref: m.name, label: m.label });
 for (const m of metas) for (const it of m.items || []) out.push({ path: `${m.name.toLowerCase()}/${it.id}`, kind: 'pa', ref: m.name, label: it.label });
 out.push({ path: 'system/bar-number', kind: 'barno', label: 'bar 編號' });
+if (state.futures) out.push({ path: 'futures/feed', kind: 'feed', label: 'Tradovate SIM（成交、掛單）' });
 for (const c of state.intakeCleaners || []) out.push({ path: `system/intake/${c.name}`, kind: 'intake', label: c.label });
 for (const n of state.notes || []) out.push({ path: n.path, kind: 'note', ref: n.id, label: n.text });
 for (const r of state.reports || []) out.push({ path: r.path, kind: 'report', ref: r.id, label: r.title });
@@ -574,6 +582,40 @@ return null;
 }
 return { DRAW_KINDS, MARKER_TYPES, logicalAt, markerTypeOf, drawDrawings, drawingAt };
 })();
+__M['public/core/futures.js'] = (() => {
+const { etParts } = __M['public/core/time.js'];
+const FUTURES = {
+MES: { tick: 0.25, point: 5, name: 'Micro E-mini S&P 500' },
+MNQ: { tick: 0.25, point: 2, name: 'Micro E-mini Nasdaq-100' },
+MGC: { tick: 0.1, point: 10, name: 'Micro Gold' },
+MCL: { tick: 0.01, point: 100, name: 'Micro WTI Crude' },
+};
+const isFutures = (sym) => !!FUTURES[String(sym || '').toUpperCase()];
+const tickOf = (sym) => FUTURES[String(sym || '').toUpperCase()]?.tick ?? 0.01;
+const decimals = (t) => (String(t).split('.')[1] || '').length;
+function snapTick(sym, price) {
+if (price == null || !Number.isFinite(Number(price)) || !isFutures(sym)) return price;
+const t = tickOf(sym);
+return Number((Math.round(Number(price) / t) * t).toFixed(decimals(t)));
+}
+const fmtPx = (sym, v) => (v == null || !Number.isFinite(v) ? '—' : v.toFixed(Math.max(2, decimals(tickOf(sym)))));
+const sessionKey = (ts, futures) => etParts(futures ? ts + 6 * 36e5 : ts).dateKey;
+const CODES = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
+function frontTicker(sym, now = Date.now()) {
+const d = new Date(now);
+for (let y = d.getUTCFullYear(), k = 0; k < 8; k++) {
+for (const m of [3, 6, 9, 12]) {
+const first = new Date(Date.UTC(y, m - 1, 1));
+const third = 1 + ((5 - first.getUTCDay() + 7) % 7) + 14; // third Friday
+const roll = Date.UTC(y, m - 1, third) - 8 * 864e5;
+if (now < roll) return `${String(sym).toUpperCase()}${CODES[m]}${y}`;
+}
+y += 1;
+}
+return `${String(sym).toUpperCase()}Z${d.getUTCFullYear()}`;
+}
+return { FUTURES, isFutures, tickOf, snapTick, fmtPx, sessionKey, frontTicker };
+})();
 __M['public/core/chart.js'] = (() => {
 const { PERIODS, TZ, barIndexAt, barNumbers } = __M['public/core/time.js'];
 const { orderView, fmtPnl, ORDER_STATUS, planUnderlying, planTable, rightOf, legSideOk, bracketOk } = __M['public/core/options.js'];
@@ -581,6 +623,7 @@ const { groupOf, tradePath } = __M['public/core/layers.js'];
 const { T, chartStyles } = __M['public/core/theme.js'];
 const { profile } = __M['public/core/vp.js'];
 const { drawDrawings, drawingAt, DRAW_KINDS } = __M['public/core/drawings.js'];
+const { isFutures } = __M['public/core/futures.js'];
 const CANDLE = 'candle_pane';
 const CTX = new Map(); // chart.id -> per-chart render context
 let registered = false;
@@ -958,8 +1001,25 @@ ctx.fillText(edge.text, 11, y);
 if (edge.retry) c.edgeHit = { x0: 4, x1: 4 + w, y0: y - 11, y1: y + 11 };
 }
 drawLevels(ctx, c, bounding, yAxis);
+drawFeedWorking(ctx, c, bounding, yAxis);
 ctx.restore();
 return false;
+}
+function drawFeedWorking(ctx, c, bounding, yAxis) {
+for (const w of c.feedWorking || []) {
+if (w.price == null) continue;
+const y = yAxis.convertToPixel(w.price);
+if (y < 0 || y > bounding.height) continue;
+const col = w.side === 'Buy' ? T.up : T.down;
+ctx.save();
+ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.setLineDash([6, 4]); ctx.lineWidth = 1;
+ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(bounding.width, y); ctx.stroke(); ctx.setLineDash([]);
+const text = `Tradovate ${w.side === 'Buy' ? '買' : '賣'} ${w.qty ?? ''} ${w.type || ''} ${w.price}`;
+ctx.font = '600 10px sans-serif'; const tw = ctx.measureText(text).width + 8;
+ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(19,23,34,0.85)'; ctx.fillRect(bounding.width - tw - 70, y - 8, tw, 15);
+ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, bounding.width - tw - 66, y);
+ctx.restore();
+}
 }
 function drawIntakeMarks(ctx, c, data, from, to, xAxis, yAxis) {
 c.intakeHits = [];
@@ -1827,7 +1887,7 @@ set onLegendToggle(fn) { onLegendToggle = fn; },
 set onEye(fn) { onEye = fn; },
 set onLegendFold(fn) { onLegendFold = fn; },
 setBars(symbol, tf, bars, loadOlder) {
-ctx.tf = tf; ctx.bars = bars; ctx.barNo = barNumbers(bars, tf);
+ctx.tf = tf; ctx.bars = bars; ctx.fut = isFutures(symbol); ctx.barNo = barNumbers(bars, tf, ctx.fut);
 queueMicrotask(() => onBarHover?.(null)); // p1.55.1: new data -> the readout shows the last bar
 ctx.rows = {};
 for (const [name, paneId] of active) chart.removeIndicator({ name, paneId });
@@ -1843,7 +1903,7 @@ ctx.loadingOlder = true; redraw();
 const older = await loadOlder().catch(() => null);
 ctx.loadingOlder = false;
 if (!older) return callback([], { forward: true, backward: false }); // failed: allow retry
-if (older.length) { ctx.bars = [...older, ...ctx.bars]; ctx.barNo = barNumbers(ctx.bars, tf); }
+if (older.length) { ctx.bars = [...older, ...ctx.bars]; ctx.barNo = barNumbers(ctx.bars, tf, ctx.fut); }
 callback(older, { forward: older.done !== true, backward: false });
 },
 });
@@ -1879,6 +1939,7 @@ ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
 ctx.reports = (state.reports || []).filter((r) => visible.has(r.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
+if (visible.has('futures/feed')) { ctx.fills = [...ctx.fills, ...(state.feedFills || [])]; ctx.feedWorking = state.feedWorking || []; } else ctx.feedWorking = [];
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
 ctx.paShow = Object.fromEntries(['ranges', 'channels', 'wm', 'events', 'zones'].map((x) => [x, visible.has(`pa/${x}`)]));
 ctx.drawings = (state.drawings || []).filter((d) => d.path && visible.has(d.path));
@@ -2240,6 +2301,7 @@ return { COMPUTE };
 })();
 __M['public/core/readout.js'] = (() => {
 const { PERIODS, etParts } = __M['public/core/time.js'];
+const dayOf = (ts, fut) => etParts(fut ? ts + 6 * 36e5 : ts).dateKey;
 const daily = (tf) => (PERIODS[tf]?.min || 0) >= 1440 || !!PERIODS[tf]?.months;
 const num = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toFixed(d));
 const fmtVol = (v) => (v == null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(Math.round(v)));
@@ -2249,30 +2311,32 @@ const keys = Object.keys(closes || {}).filter((d) => d < day).sort();
 if (keys.length) return { prior: closes[keys.at(-1)], est: false, priorDay: keys.at(-1) };
 return { prior: fallback ?? null, est: fallback != null, priorDay: null };
 }
-function quoteOf(all, tf, closes) {
+function quoteOf(all, tf, closes, { futures = false } = {}) {
 if (!all?.length) return null;
 const last = all.at(-1);
-const day = etParts(last.timestamp).dateKey;
+const day = dayOf(last.timestamp, futures);
 if (daily(tf)) {
 const prev = all.at(-2);
-return { last: last.close, ...priorClose(closes, day, prev?.close), o: last.open, h: last.high, l: last.low, v: last.volume, asOf: last.timestamp, daily: true, day };
+const p = futures ? { prior: prev?.close ?? null, est: false, priorDay: prev ? dayOf(prev.timestamp, true) : null } : priorClose(closes, day, prev?.close);
+return { last: last.close, ...p, futures, o: last.open, h: last.high, l: last.low, v: last.volume, asOf: last.timestamp, daily: true, day };
 }
 let k = all.length - 1;
-while (k > 0 && etParts(all[k - 1].timestamp).dateKey === day) k--;
+while (k > 0 && dayOf(all[k - 1].timestamp, futures) === day) k--;
 const sess = all.slice(k);
 const per = PERIODS[tf];
+const p = futures ? { prior: k > 0 ? all[k - 1].close : null, est: false, priorDay: k > 0 ? dayOf(all[k - 1].timestamp, true) : null } : priorClose(closes, day, k > 0 ? all[k - 1].close : null);
 return {
-last: last.close, ...priorClose(closes, day, k > 0 ? all[k - 1].close : null), o: sess[0].open, h: Math.max(...sess.map((b) => b.high)), l: Math.min(...sess.map((b) => b.low)),
+last: last.close, ...p, futures, o: sess[0].open, h: Math.max(...sess.map((b) => b.high)), l: Math.min(...sess.map((b) => b.low)),
 v: sess.reduce((s, b) => s + (b.volume || 0), 0), asOf: last.close_ts ?? last.timestamp + (per?.min || 0) * 60000, day,
 };
 }
-function barOf(all, i, tf, n, closes) {
+function barOf(all, i, tf, n, closes, { futures = false } = {}) {
 const b = all[i];
 if (!b) return null;
 const prev = all[i - 1];
 const e = etParts(b.timestamp);
 let ref = prev?.close ?? null, est = false;
-if (prev && (daily(tf) || etParts(prev.timestamp).dateKey !== e.dateKey)) {
+if (prev && !futures && (daily(tf) || etParts(prev.timestamp).dateKey !== e.dateKey)) {
 const p = priorClose(closes, e.dateKey, prev.close);
 ref = p.prior; est = p.est;
 }
@@ -2290,7 +2354,7 @@ el.append(span('sym', symbol || ''), span('px', num(q.last)), span(`chg ${tone(c
 span(q.est ? 'kv est' : 'kv', `${q.est ? '前收（估）' : '前收'} ${num(q.prior)}`),
 span('kv', `開 ${num(q.o)}`), span('kv', `高 ${num(q.h)}`), span('kv', `低 ${num(q.l)}`), span('kv', `量 ${fmtVol(q.v)}`),
 span('asof', `${snapshot ? '截至' : '最新'} ${e.dateKey.slice(5)} ${q.daily ? '收盤' : `${e.hhmm} ET`}${snapshot ? '（快照）' : ''}`));
-el.title = q.prior == null ? '沒有前一個收盤' : q.est ? `沒有前一天的日線收盤，用前一天最後一根的收盤 ${num(q.prior)}` : `漲跌對 ${q.priorDay} 的日線收盤 ${num(q.prior)}`;
+el.title = q.prior == null ? '沒有前一個收盤' : q.futures ? `前收 = 上一個交易時段 17:00 ET 收盤（${q.priorDay || '—'}）` : q.est ? `沒有前一天的日線收盤，用前一天最後一根的收盤 ${num(q.prior)}` : `漲跌對 ${q.priorDay} 的日線收盤 ${num(q.prior)}`;
 }
 function renderBar(el, r, { hovered = false } = {}) {
 el.innerHTML = '';
@@ -2412,6 +2476,7 @@ const { registerAll, createCanvasChart } = __M['public/core/chart.js'];
 const { T } = __M['public/core/theme.js'];
 const { leaves, shown } = __M['public/core/layers.js'];
 const { barNumbers } = __M['public/core/time.js'];
+const { isFutures } = __M['public/core/futures.js'];
 const { unpackRows } = __M['public/core/wire.js'];
 const { COMPUTE } = __M['card/indicators.js'];
 const { quoteOf, barOf, renderQuote, renderBar, READOUT_CSS } = __M['public/core/readout.js'];
@@ -2531,7 +2596,7 @@ else if (p.rows?.[m.name]) rows[m.name] = unpackRows(p.rows[m.name], bars.length
 const hidden = new Set();
 if (p.focus === 'temp' || (p.focus == null && p.latest === false)) for (const d of shared) hidden.add(d.id);
 else if (Array.isArray(p.focus)) for (const d of shared) if (!p.focus.includes(d.id)) hidden.add(d.id);
-return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, pa: Array.isArray(p.pa) ? p.pa : null, all, warm: p.warm, bars, rows, nums: barNumbers(bars, p.tf), pin: null,
+return { id, tf: p.tf, label: p.label || p.tf, missing: p.missing || null, ensure: p.ensure || null, pa: Array.isArray(p.pa) ? p.pa : null, all, warm: p.warm, bars, rows, nums: barNumbers(bars, p.tf, isFutures(data.symbol)), pin: null,
 temp: (p.temp || []).map((d) => ({ ...d })), drafts: [], hidden, pendingDel: new Set(), selection: null };
 });
 const state = { symbol: data.symbol, notes: data.notes, signals: data.signals, drawings: [], intakeCleaners: data.intakeCleaners || [], fills: [], orders: [] };
@@ -2551,10 +2616,10 @@ const P = () => panes[cur];
 const showBar = (i, hovered) => {
 const p = P();
 const k = i ?? p.pin ?? p.bars.length - 1;
-renderBar(barEl, barOf(p.all, k + p.warm, p.tf, p.nums[k]?.n, data.daily_closes), { hovered: hovered || (i == null && p.pin != null) });
+renderBar(barEl, barOf(p.all, k + p.warm, p.tf, p.nums[k]?.n, data.daily_closes, { futures: isFutures(data.symbol) }), { hovered: hovered || (i == null && p.pin != null) });
 root.dataset.bar = String(k);
 };
-const showQuote = () => renderQuote(quoteEl, quoteOf(P().all, P().tf, data.daily_closes), { symbol: data.symbol, snapshot: true });
+const showQuote = () => renderQuote(quoteEl, quoteOf(P().all, P().tf, data.daily_closes, { futures: isFutures(data.symbol) }), { symbol: data.symbol, snapshot: true });
 const visible = () => {
 const off = GROUPS.filter((g) => offGroups[g.id]), pick = P().pa;
 return new Set(leaves(state, data.metas).map((l) => l.path).filter((p) => p.startsWith('card/')
