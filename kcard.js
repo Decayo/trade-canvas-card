@@ -613,7 +613,17 @@ y += 1;
 }
 return `${String(sym).toUpperCase()}Z${d.getUTCFullYear()}`;
 }
-return { FUTURES, isFutures, tickOf, snapTick, fmtPx, sessionKey, frontTicker };
+const shortTicker = (t) => String(t || '').toUpperCase().replace(/^([A-Z]+[FGHJKMNQUVXZ])20(\d)(\d)$/, '$1$3');
+function longTicker(t, now = Date.now()) {
+const m = /^([A-Z]+[FGHJKMNQUVXZ])(\d)$/.exec(String(t || '').toUpperCase());
+if (!m) return String(t || '').toUpperCase();
+const y = new Date(now).getUTCFullYear(), d = Number(m[2]);
+let full = y - (y % 10) + d;
+if (full < y - 1) full += 10; // a code like Z6 seen in 2029 means 2036
+return `${m[1]}${full}`;
+}
+const MD_BAR = { M1: '1m', M5: '5m', M15: '15m', M30: '30m', H1: '1h', H4: '4h', D1: '1d' };
+return { FUTURES, isFutures, tickOf, snapTick, fmtPx, sessionKey, frontTicker, shortTicker, longTicker, MD_BAR };
 })();
 __M['public/core/chart.js'] = (() => {
 const { PERIODS, TZ, barIndexAt, barNumbers } = __M['public/core/time.js'];
