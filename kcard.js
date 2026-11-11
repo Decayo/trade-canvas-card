@@ -1011,22 +1011,54 @@ if (edge.retry) c.edgeHit = { x0: 4, x1: 4 + w, y0: y - 11, y1: y + 11 };
 }
 drawLevels(ctx, c, bounding, yAxis);
 drawFeedWorking(ctx, c, bounding, yAxis);
+drawFeedPosition(ctx, c, bounding, yAxis);
 ctx.restore();
 return false;
 }
+function drawFeedPosition(ctx, c, bounding, yAxis) {
+c.posHits = [];
+for (const p of c.feedPosition || []) {
+if (p.avg == null || !p.net) continue;
+const y = yAxis.convertToPixel(p.avg);
+if (y < 0 || y > bounding.height) continue;
+const col = p.net > 0 ? T.up : T.down;
+ctx.save();
+ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(bounding.width, y); ctx.stroke();
+const pl = p.est_pl != null ? ` · P/L ${p.est_pl >= 0 ? '+' : ''}${p.est_pl.toFixed(2)}` : '';
+const text = `SIM 部位 ${p.net > 0 ? '+' : ''}${p.net} ${p.contract} @ ${p.avg.toFixed(2)}${pl}`;
+ctx.font = '600 11px sans-serif'; const tw = ctx.measureText(text).width + 10, bw = 42, x0 = 8;
+ctx.fillStyle = col; ctx.fillRect(x0, y - 9, tw, 18);
+ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, x0 + 5, y);
+ctx.fillStyle = '#131722'; ctx.fillRect(x0 + tw + 4, y - 9, bw, 18); ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(x0 + tw + 4, y - 9, bw, 18);
+ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.fillText('平倉', x0 + tw + 4 + bw / 2, y);
+c.posHits.push({ x0, x1: x0 + tw + 4 + bw, y0: y - 9, y1: y + 9, contract: p.contract });
+ctx.restore();
+}
+}
+const ROLE_TAG = { sl: 'SL', tp: 'TP', entry: '進場' };
 function drawFeedWorking(ctx, c, bounding, yAxis) {
+c.feedHits = [];
 for (const w of c.feedWorking || []) {
 if (w.price == null) continue;
-const y = yAxis.convertToPixel(w.price);
+const moved = c.feedDrag?.id === w.id ? c.feedDrag.price : null;
+const y = yAxis.convertToPixel(moved ?? w.price);
 if (y < 0 || y > bounding.height) continue;
 const col = w.side === 'Buy' ? T.up : T.down;
 ctx.save();
-ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.setLineDash([6, 4]); ctx.lineWidth = 1;
+if (moved != null) { // where the order still is
+const y0 = yAxis.convertToPixel(w.price);
+ctx.strokeStyle = col; ctx.globalAlpha = 0.3; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(bounding.width, y0); ctx.stroke();
+}
+ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.setLineDash([6, 4]); ctx.lineWidth = moved != null ? 1.5 : 1;
 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(bounding.width, y); ctx.stroke(); ctx.setLineDash([]);
-const text = `Tradovate ${w.side === 'Buy' ? '買' : '賣'} ${w.qty ?? ''} ${w.type || ''} ${w.price}`;
-ctx.font = '600 10px sans-serif'; const tw = ctx.measureText(text).width + 8;
-ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(19,23,34,0.85)'; ctx.fillRect(bounding.width - tw - 70, y - 8, tw, 15);
-ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, bounding.width - tw - 66, y);
+const tag = ROLE_TAG[w.role] ? `${ROLE_TAG[w.role]} ` : '';
+const grip = w.role && !w.lock ? '⇕ ' : w.lock ? '🔒 ' : '';
+const text = `${grip}${tag}Tradovate ${w.side === 'Buy' ? '買' : '賣'} ${w.qty ?? ''} ${w.type || ''} ${w.price}${moved != null ? ` → ${moved}` : ''}`;
+ctx.font = '600 10px sans-serif'; const tw = ctx.measureText(text).width + 8, x0 = bounding.width - tw - 70;
+ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(19,23,34,0.85)'; ctx.fillRect(x0, y - 8, tw, 15);
+if (moved != null || (w.role && !w.lock)) { ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, y - 7.5, tw - 1, 14); }
+ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, x0 + 4, y);
+if (w.role) c.feedHits.push({ x0, x1: x0 + tw, y0: y - 8, y1: y + 7, lineY: y, w });
 ctx.restore();
 }
 }
@@ -1627,8 +1659,11 @@ e.preventDefault();
 const price = chart.convertFromPixel([{ x: p.x, y: p.y }], { paneId: CANDLE })[0]?.value;
 if (price != null) onContextMenu?.(price, { x: e.clientX, y: e.clientY });
 });
+const feedAt = (p) => (ctx.feedHits || []).find((h) => p.x >= h.x0 && p.x <= h.x1 && p.y >= h.y0 && p.y <= h.y1);
 el.addEventListener('mousemove', (e) => {
 if (dragging) return;
+const fh = feedAt(local(e));
+if (fh) { el.title = fh.w.lock || (fh.w.role === 'entry' ? '拖曳改進場價（確認後用 --replace 重送）' : `拖曳改${fh.w.role === 'sl' ? '停損' : '停利'}（確認後送出）`); setCursor(fh.w.lock ? 'pointer' : 'grab'); return; }
 const p = local(e), h = orderAt(p);
 const hd = h?.handles?.find((x) => p.x >= x.x0 && p.x <= x.x1 && p.y >= x.y0 && p.y <= x.y1);
 el.title = hd ? (hd.leg === 'tp' ? 'Drag to add Take profit' : 'Drag to add Stop loss') : '';
@@ -1715,6 +1750,33 @@ if (e.button !== 0) return;
 const start = local(e);
 const eh = ctx.edgeHit;
 if (eh && start.x >= eh.x0 && start.x <= eh.x1 && start.y >= eh.y0 && start.y <= eh.y1) { e.stopPropagation(); onEdgeRetry?.(); return; }
+const fh = feedAt(start);
+if (fh) {
+e.stopPropagation(); e.preventDefault();
+const box = paneDom().getBoundingClientRect();
+if (fh.w.lock || ctx.feedDrag) { onFeedDrop?.(fh.w, null, { x: box.left + fh.x0, y: box.top + fh.y1 + 4 }); return; }
+const offset = start.y - fh.lineY;
+const priceAt = (y) => { const v = chart.convertFromPixel([{ x: 10, y: y - offset }], { paneId: CANDLE })[0].value; return ctx.snapPrice ? ctx.snapPrice(v) : v; };
+let moving = false;
+const move = (ev) => {
+const y = local(ev).y;
+if (!moving) { if (Math.abs(y - start.y) <= 4) return; moving = true; dragging = true; setCursor('grabbing'); }
+ctx.feedDrag = { id: fh.w.id, price: priceAt(y) }; redraw();
+};
+const up = (ev) => {
+document.removeEventListener('mousemove', move, true);
+document.removeEventListener('mouseup', up, true);
+dragging = false; setCursor('');
+if (!moving) return;
+const price = priceAt(local(ev).y);
+if (price === fh.w.price) { ctx.feedDrag = null; redraw(); return; }
+ctx.feedDrag = { id: fh.w.id, price, pending: true }; redraw(); // stays until the page confirms or cancels
+onFeedDrop?.(fh.w, price, { x: ev.clientX, y: ev.clientY });
+};
+document.addEventListener('mousemove', move, true);
+document.addEventListener('mouseup', up, true);
+return;
+}
 const hit = orderAt(start);
 if (!hit) {
 if (ctx.lockedGroup) { ctx.lockedGroup = null; redraw(); onFocusChange?.(focusGroup(ctx), false); } // empty click releases
@@ -1856,7 +1918,7 @@ chart.setPaneOptions({ id: paneId, height: on ? each : 24, minHeight: 24 });
 }
 if (typeof ResizeObserver !== 'undefined' && interactive) new ResizeObserver(() => fitSubPanes()).observe(el);
 let vpRaf = 0, onVisibleChange = null, onLegDrag = null, onFocusChange = null, onEdgeRetry = null, onGroupMove = null, onTradeAction = null,
-onDrawingDone = null, onDrawingChange = null, onDrawingSelect = null, onDrawingEdit = null, onBarHover = null;
+onDrawingDone = null, onDrawingChange = null, onDrawingSelect = null, onDrawingEdit = null, onBarHover = null, onFeedDrop = null;
 chart.subscribeAction('onVisibleRangeChange', () => {
 if (vpRaf) return;
 const raf = globalThis.requestAnimationFrame || ((f) => setTimeout(f, 16)); // Node (headless snapshot) has no rAF
@@ -1875,6 +1937,8 @@ set onDrawingDone(fn) { onDrawingDone = fn; },
 set onDrawingChange(fn) { onDrawingChange = fn; },
 set onDrawingSelect(fn) { onDrawingSelect = fn; },
 set onDrawingEdit(fn) { onDrawingEdit = fn; },
+set onFeedDrop(fn) { onFeedDrop = fn; },
+clearFeedDrag() { if (ctx.feedDrag) { ctx.feedDrag = null; redraw(); } },
 startDraw(kind) { ctx.drawMode = kind || null; ctx.drawDraft = null; ctx.selectedDrawing = null; redraw(); },
 get drawMode() { return ctx.drawMode || null; },
 get selectedDrawing() { return ctx.selectedDrawing || null; },
@@ -1943,7 +2007,7 @@ updateTitleH();
 ctx.showBarNo = visible.has('system/bar-number');
 ctx.notes = (state.notes || []).filter((n) => visible.has(n.path));
 ctx.fills = (state.fills || []).filter((f) => visible.has(f.path));
-if (visible.has('futures/feed')) { ctx.fills = [...ctx.fills, ...(state.feedFills || [])]; ctx.feedWorking = state.feedWorking || []; } else ctx.feedWorking = [];
+if (visible.has('futures/feed')) { ctx.fills = [...ctx.fills, ...(state.feedFills || [])]; ctx.feedWorking = state.feedWorking || []; ctx.feedPosition = state.feedPosition || []; } else { ctx.feedWorking = []; ctx.feedPosition = []; }
 ctx.signals = (state.signals || []).filter((s) => visible.has(s.path));
 ctx.paShow = Object.fromEntries(['ranges', 'channels', 'wm', 'events', 'zones'].map((x) => [x, visible.has(`pa/${x}`)]));
 ctx.drawings = (state.drawings || []).filter((d) => d.path && visible.has(d.path));
